@@ -35,6 +35,13 @@ struct ContentView: View {
             wechatBadge
                 .padding(.trailing, 14)
                 .padding(.bottom, 14)
+
+            // 全局画中画锚点（几乎不可见）
+            FloatPiPAnchor()
+                .frame(width: 48, height: 48)
+                .opacity(0.02)
+                .allowsHitTesting(false)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .preferredColorScheme(.dark)
         .environment(\.locale, Locale(identifier: "zh_CN"))
@@ -258,7 +265,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: model.floatEnabled ? "dot.circle.and.hand.point.up.left.fill" : "circle.dashed")
-                    Text(model.floatEnabled ? "关闭悬浮窗" : "打开悬浮窗")
+                    Text(model.floatEnabled ? "关闭全局悬浮" : "打开全局悬浮")
                         .fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)

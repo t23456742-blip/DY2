@@ -91,10 +91,7 @@ final class SlimCleaner: @unchecked Sendable {
         }
 
         let store = RulesStore.shared
-        if store.useCustomRules {
-            return store.isKeptByCustom(rel)
-        }
-        return defaultShouldKeep(relativePath: rel)
+        return store.isKeptByActiveRules(rel) { self.defaultShouldKeep(relativePath: $0) }
     }
 
     func defaultShouldKeep(relativePath rel: String) -> Bool {
