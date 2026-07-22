@@ -5,7 +5,6 @@ on:
   push:
     branches: [main, master]
     tags: ["v*"]
-  pull_request:
 
 jobs:
   build:
@@ -25,25 +24,20 @@ jobs:
       - name: Install tools
         run: |
           brew install ldid xcodegen
-          ldid 2>&1 | head -n 2 || true
           xcodegen --version
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        working-directory: DYSlimClean
+        run: |
+          pwd
+          ls -la
+          test -f project.yml
+          xcodegen generate
 
       - name: Build (unsigned)
+        working-directory: DYSlimClean
         run: |
-          set -o pipefail
           xcodebuild \
-            -project DYSlimClean.xcodeproj \
-            -scheme DYSlimClean \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            build | xcpretty || xcodebuild \
             -project DYSlimClean.xcodeproj \
             -scheme DYSlimClean \
             -configuration Release \
@@ -55,6 +49,7 @@ jobs:
             build
 
       - name: Package tipa
+        working-directory: DYSlimClean
         run: |
           chmod +x scripts/package-tipa.sh
           bash scripts/package-tipa.sh
@@ -64,8 +59,8 @@ jobs:
         with:
           name: DYSlimClean-tipa
           path: |
-            dist/*.tipa
-            dist/*.ipa
+            DYSlimClean/dist/*.tipa
+            DYSlimClean/dist/*.ipa
           if-no-files-found: error
 
       - name: Release on tag
@@ -73,7 +68,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.tipa
-            dist/*.ipa
+            DYSlimClean/dist/*.tipa
+            DYSlimClean/dist/*.ipa
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
