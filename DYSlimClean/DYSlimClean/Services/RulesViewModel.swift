@@ -87,6 +87,7 @@ final class RulesViewModel: ObservableObject {
     func refreshTree() {
         isBusy = true
         statusText = "正在读取抖音全部目录…"
+        let hints = Self.folderHints
         Task.detached(priority: .userInitiated) { [cleaner] in
             guard let container = cleaner.locateAwemeContainer() else {
                 await MainActor.run {
@@ -96,7 +97,7 @@ final class RulesViewModel: ObservableObject {
                 }
                 return
             }
-            let top = Self.listChildren(of: "", under: container, depth: 0, hints: Self.folderHints)
+            let top = Self.listChildren(of: "", under: container, depth: 0, hints: hints)
             await MainActor.run {
                 self.childrenCache = ["": top]
                 // 预加载 Documents / Library 一层，方便看到「所有目录」
@@ -106,7 +107,7 @@ final class RulesViewModel: ObservableObject {
                             of: pre,
                             under: container,
                             depth: 1,
-                            hints: Self.folderHints
+                            hints: hints
                         )
                         self.expanded.insert(pre)
                     }

@@ -77,7 +77,7 @@ final class FloatingBallController: NSObject, AVPictureInPictureControllerDelega
         )
         let pip = AVPictureInPictureController(contentSource: cfg)
         pip.delegate = self
-        pip.canStartPictureInPictureAutomaticallyWhenEnteringBackground = true
+        // 视频通话 PiP 无 canStartPictureInPictureAutomaticallyWhenEnteringBackground
         pipController = pip
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
