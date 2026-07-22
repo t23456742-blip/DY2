@@ -10,6 +10,8 @@ final class SlimCleaner: @unchecked Sendable {
         var keepHits: Int = 0
         var extras: [URL] = []
         var extraBytes: Int64 = 0
+        var totalBytes: Int64 = 0
+        var keepBytes: Int64 = 0
         var error: String?
     }
 
@@ -150,11 +152,14 @@ final class SlimCleaner: @unchecked Sendable {
             rel = rel.replacingOccurrences(of: "\\", with: "/")
 
             result.total += 1
+            let size = Int64(values?.fileSize ?? 0)
+            result.totalBytes += size
             if keepList.contains(rel) {
                 result.keepHits += 1
+                result.keepBytes += size
             } else {
                 result.extras.append(item)
-                result.extraBytes += Int64(values?.fileSize ?? 0)
+                result.extraBytes += size
             }
         }
         return result

@@ -10,6 +10,13 @@ final class CleanViewModel: ObservableObject {
     @Published var keepHitCount = 0
     @Published var extraCount = 0
     @Published var extraSizeText = "0 字节"
+    @Published var beforeSizeText = "—"
+    @Published var afterSizeText = "—"
+    @Published var savedSizeText = "—"
+    @Published var beforeBytes: Int64 = 0
+    @Published var afterBytes: Int64 = 0
+    @Published var hasScanned = false
+    @Published var hasCleaned = false
     @Published var isBusy = false
     @Published var busyText = "处理中…"
     @Published var showConfirmDelete = false
@@ -41,7 +48,7 @@ final class CleanViewModel: ObservableObject {
         if let url = cleaner.locateAwemeContainer() {
             containerFound = true
             containerPath = url.path
-            log("已找到抖音容器：\(url.path)")
+            log("已找到抖音容器")
         } else {
             containerFound = false
             containerPath = ""
@@ -58,12 +65,13 @@ final class CleanViewModel: ObservableObject {
         Task.detached(priority: .userInitiated) { [cleaner] in
             let result = cleaner.scan()
             await MainActor.run {
-                self.apply(result)
+                self.applyScan(result, isPostClean: false)
                 self.isBusy = false
                 if let err = result.error {
                     self.log("扫描失败：\(err)")
                 } else {
                     self.log("扫描完成：共 \(result.total) 个 · 可保留 \(result.keepHits) 个 · 多余 \(result.extras.count) 个")
+                    self.log("优化前占用：\(Self.formatBytes(result.totalBytes)) · 可释放：\(Self.formatBytes(result.extraBytes))")
                 }
             }
         }
@@ -73,21 +81,29 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy, !extras.isEmpty else { return }
         isBusy = true
         busyText = "删除中…"
+        let snapshotBefore = beforeBytes
         let targets = extras
         log("开始删除 \(targets.count) 个多余文件…")
 
         Task.detached(priority: .userInitiated) { [cleaner] in
             let summary = cleaner.delete(urls: targets)
+            let afterResult = cleaner.scan()
             await MainActor.run {
+                self.hasCleaned = true
+                self.applyScan(afterResult, isPostClean: true, forcedBefore: snapshotBefore, freed: summary.freedBytes)
                 self.isBusy = false
                 let freed = Self.formatBytes(summary.freedBytes)
                 self.log("删除完成：成功 \(summary.deleted) 个 · 失败 \(summary.failed) 个 · 释放 \(freed)")
-                self.scan()
+                if let err = afterResult.error {
+                    self.log("复扫提示：\(err)")
+                } else {
+                    self.log("优化后占用：\(Self.formatBytes(afterResult.totalBytes))")
+                }
             }
         }
     }
 
-    private func apply(_ result: SlimCleaner.ScanResult) {
+    private func applyScan(_ result: SlimCleaner.ScanResult, isPostClean: Bool, forcedBefore: Int64? = nil, freed: Int64 = 0) {
         if let url = result.container {
             containerFound = true
             containerPath = url.path
@@ -98,10 +114,27 @@ final class CleanViewModel: ObservableObject {
         extraCount = result.extras.count
         extraBytes = result.extraBytes
         extraSizeText = Self.formatBytes(extraBytes)
+        hasScanned = result.error == nil
+
+        if isPostClean {
+            let before = forcedBefore ?? beforeBytes
+            beforeBytes = before
+            afterBytes = result.totalBytes
+            beforeSizeText = Self.formatBytes(before)
+            afterSizeText = Self.formatBytes(afterBytes)
+            let saved = max(0, before - afterBytes)
+            savedSizeText = Self.formatBytes(saved > 0 ? saved : freed)
+        } else if result.error == nil {
+            beforeBytes = result.totalBytes
+            beforeSizeText = Self.formatBytes(result.totalBytes)
+            // 预估优化后 = 可保留体积
+            afterBytes = result.keepBytes
+            afterSizeText = Self.formatBytes(result.keepBytes) + "（预估）"
+            savedSizeText = Self.formatBytes(result.extraBytes) + "（可释放）"
+        }
     }
 
-    private static func formatBytes(_ bytes: Int64) -> String {
-        // Force Chinese-friendly output regardless of system language
+    static func formatBytes(_ bytes: Int64) -> String {
         sizeFormatter.formattingContext = .standalone
         let raw = sizeFormatter.string(fromByteCount: bytes)
         return raw
@@ -109,9 +142,6 @@ final class CleanViewModel: ObservableObject {
             .replacingOccurrences(of: "byte", with: "字节")
             .replacingOccurrences(of: "Bytes", with: "字节")
             .replacingOccurrences(of: "Byte", with: "字节")
-            .replacingOccurrences(of: " KB", with: " KB")
-            .replacingOccurrences(of: " MB", with: " MB")
-            .replacingOccurrences(of: " GB", with: " GB")
     }
 
     private func log(_ line: String) {
