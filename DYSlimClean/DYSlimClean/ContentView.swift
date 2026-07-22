@@ -46,7 +46,26 @@ struct ContentView: View {
         } message: {
             Text("将删除 \(model.extraCount) 个多余文件（约 \(model.extraSizeText)）。建议先备份；是否掉登录取决于白名单。")
         }
-        .onAppear { model.bootstrap() }
+        .alert("移机粘贴修复", isPresented: $model.showMigrateResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.migrateResultText)
+        }
+        .onAppear {
+            model.bootstrap()
+            model.floatEnabled = FloatingBallController.shared.isVisible
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didScan)) { _ in
+            model.scan()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didSlim)) { _ in
+            model.requestSlimFromFloat()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.visibilityChanged)) { note in
+            if let on = note.object as? Bool {
+                model.floatEnabled = on
+            }
+        }
     }
 
     private var header: some View {
@@ -88,7 +107,7 @@ struct ContentView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                 Spacer()
-                Text("白名单 \(model.keepCount)")
+                Text("规则已加固")
                     .font(.caption2.weight(.medium))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -96,7 +115,7 @@ struct ContentView: View {
                     .foregroundColor(accent)
                     .clipShape(Capsule())
             }
-            Text(model.containerPath.isEmpty ? "应用：抖音 Aweme · 须巨魔安装本软件" : model.containerPath)
+            Text(model.containerPath.isEmpty ? "Documents 指定文件夹保留 · _ttinstall 不删 · 其余按精简包" : model.containerPath)
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
                 .lineLimit(2)
@@ -232,6 +251,53 @@ struct ContentView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
             .disabled(model.extraCount == 0 || model.isBusy)
+
+            Button {
+                FloatingBallController.shared.toggle()
+                model.floatEnabled = FloatingBallController.shared.isVisible
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: model.floatEnabled ? "dot.circle.and.hand.point.up.left.fill" : "circle.dashed")
+                    Text(model.floatEnabled ? "关闭悬浮窗" : "打开悬浮窗")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: model.floatEnabled
+                            ? [Color.orange, Color(red: 1.0, green: 0.55, blue: 0.2)]
+                            : [Color(red: 0.35, green: 0.45, blue: 0.95), Color(red: 0.2, green: 0.7, blue: 0.9)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .disabled(model.isBusy)
+
+            Button {
+                model.runMigratePasteFix()
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "doc.on.clipboard")
+                    Text("移机修复·复制粘贴")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.55, green: 0.35, blue: 0.95), Color(red: 0.3, green: 0.5, blue: 1.0)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .disabled(model.isBusy)
         }
     }
 

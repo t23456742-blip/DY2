@@ -27,6 +27,42 @@ final class SlimCleaner: @unchecked Sendable {
         ".com.apple.mobile_container_manager.metadata.plist"
     ]
 
+    /// Documents 下整夹保留（截图精简结构）；其中 _ttinstall_document 内文件一律不删
+    static let documentsKeepFolders: [String] = [
+        "Documents/_bdticketguard_document",
+        "Documents/_ttinstall_document",
+        "Documents/AWEPublishedImages",
+        "Documents/com.bytedance.ies",
+        "Documents/com.bytedance.ies-effects-cache",
+        "Documents/FeedbackRecorder",
+        "Documents/IESPlayTimePredictModel",
+        "Documents/mmkv",
+        "Documents/StudioAudit",
+        "Documents/TTAdSplashSimpleCache"
+    ]
+
+    /// Documents 根目录需保留的文件
+    static let documentsKeepFiles: Set<String> = [
+        "Documents/Aweme.db",
+        "Documents/Aweme.db-backup",
+        "Documents/Aweme.db-shm",
+        "Documents/Aweme.db-wal",
+        "Documents/db.sqlite3",
+        "Documents/hostcache_sync_v1",
+        "Documents/hostcache_v1",
+        "Documents/lsdata.plist",
+        "Documents/server.json",
+        "Documents/tt_net_config.config",
+        "Documents/ttaccount_token_guard_data.archiver",
+        "Documents/ttaccountSDKUserInfo.archiver"
+    ]
+
+    /// 移机/粘贴相关：整夹保留，避免恢复后复制粘贴异常
+    static let libraryKeepFolders: [String] = [
+        "Library/Preferences",
+        "Library/SyncedPreferences"
+    ]
+
     let keepList: Set<String>
 
     init(keepListURL: URL? = nil) {
@@ -41,6 +77,48 @@ final class SlimCleaner: @unchecked Sendable {
         } else {
             keepList = []
         }
+    }
+
+    /// 是否应保留
+    func shouldKeep(relativePath rel: String) -> Bool {
+        if Self.protectedNames.contains((rel as NSString).lastPathComponent) {
+            return true
+        }
+        // 安装票据目录：永远不删
+        if rel == "Documents/_ttinstall_document"
+            || rel.hasPrefix("Documents/_ttinstall_document/") {
+            return true
+        }
+
+        let store = RulesStore.shared
+        if store.useCustomRules {
+            return store.isKeptByCustom(rel)
+        }
+        return defaultShouldKeep(relativePath: rel)
+    }
+
+    func defaultShouldKeep(relativePath rel: String) -> Bool {
+        for folder in Self.documentsKeepFolders {
+            if rel == folder || rel.hasPrefix(folder + "/") {
+                return true
+            }
+        }
+        for folder in Self.libraryKeepFolders {
+            if rel == folder || rel.hasPrefix(folder + "/") {
+                return true
+            }
+        }
+        if Self.documentsKeepFiles.contains(rel) {
+            return true
+        }
+        return keepList.contains(rel)
+    }
+
+    /// 默认规则勾选项（供规则页展示）
+    static func defaultCheckedPaths() -> Set<String> {
+        Set(documentsKeepFolders)
+            .union(documentsKeepFiles)
+            .union(libraryKeepFolders)
     }
 
     func locateAwemeContainer() -> URL? {
@@ -154,7 +232,7 @@ final class SlimCleaner: @unchecked Sendable {
             result.total += 1
             let size = Int64(values?.fileSize ?? 0)
             result.totalBytes += size
-            if keepList.contains(rel) {
+            if shouldKeep(relativePath: rel) {
                 result.keepHits += 1
                 result.keepBytes += size
             } else {
@@ -172,6 +250,20 @@ final class SlimCleaner: @unchecked Sendable {
             if Self.protectedNames.contains(url.lastPathComponent) {
                 summary.failed += 1
                 continue
+            }
+            // 双重保险：删除前再判一次保留规则
+            if let container = locateAwemeContainer() {
+                let containerPath = container.standardizedFileURL.path
+                let full = url.standardizedFileURL.path
+                if full.hasPrefix(containerPath) {
+                    var rel = String(full.dropFirst(containerPath.count))
+                    if rel.hasPrefix("/") { rel.removeFirst() }
+                    rel = rel.replacingOccurrences(of: "\\", with: "/")
+                    if shouldKeep(relativePath: rel) {
+                        summary.failed += 1
+                        continue
+                    }
+                }
             }
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
             // Ensure writable then remove (RootHide / sandbox leftovers)

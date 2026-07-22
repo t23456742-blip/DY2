@@ -4,7 +4,7 @@ import SwiftUI
 struct DYSlimCleanApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootTabView()
         }
     }
 }

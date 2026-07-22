@@ -21,6 +21,7 @@ settings:
     CODE_SIGN_ENTITLEMENTS: DYSlimClean/Resources/DYSlimClean.entitlements
     SUPPORTS_MACCATALYST: "NO"
     ENABLE_BITCODE: "NO"
+    OTHER_LDFLAGS: "$(inherited) -lsqlite3"
 targets:
   DYSlimClean:
     type: application

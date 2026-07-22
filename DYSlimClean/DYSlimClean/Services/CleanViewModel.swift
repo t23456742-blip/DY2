@@ -20,6 +20,10 @@ final class CleanViewModel: ObservableObject {
     @Published var isBusy = false
     @Published var busyText = "处理中…"
     @Published var showConfirmDelete = false
+    @Published var showMigrateResult = false
+    @Published var migrateResultText = ""
+    @Published var floatEnabled = false
+    @Published var offerCleanAfterScan = false
     @Published var logLines: [String] = []
 
     private let cleaner = SlimCleaner()
@@ -69,10 +73,44 @@ final class CleanViewModel: ObservableObject {
                 self.isBusy = false
                 if let err = result.error {
                     self.log("扫描失败：\(err)")
+                    self.offerCleanAfterScan = false
                 } else {
                     self.log("扫描完成：共 \(result.total) 个 · 可保留 \(result.keepHits) 个 · 多余 \(result.extras.count) 个")
                     self.log("优化前占用：\(Self.formatBytes(result.totalBytes)) · 可释放：\(Self.formatBytes(result.extraBytes))")
+                    if self.offerCleanAfterScan {
+                        self.offerCleanAfterScan = false
+                        if result.extras.isEmpty {
+                            self.log("没有可删除的多余文件")
+                        } else {
+                            self.showConfirmDelete = true
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    func requestSlimFromFloat() {
+        if extraCount > 0 {
+            showConfirmDelete = true
+        } else {
+            offerCleanAfterScan = true
+            scan()
+        }
+    }
+
+    func runMigratePasteFix() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "移机修复中…"
+        log("开始移机粘贴修复…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            let result = MigratePasteFix.run(cleaner: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.migrateResultText = result.message
+                self.showMigrateResult = true
+                self.log(result.ok ? "移机修复已执行" : "移机修复部分失败，请看说明")
             }
         }
     }
