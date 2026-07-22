@@ -8,18 +8,19 @@ on:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: |
-          ls /Applications | grep -i Xcode || true
-          sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer || \
-          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || \
-          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
-          xcodebuild -version
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16"
+
+
+      - name: Show Xcode
+        run: xcodebuild -version
 
       - name: Install tools
         run: |
@@ -33,6 +34,7 @@ jobs:
           ls -la
           test -f project.yml
           xcodegen generate
+          head -n 5 DYSlimClean.xcodeproj/project.pbxproj
 
       - name: Build (unsigned)
         working-directory: DYSlimClean
