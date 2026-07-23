@@ -17,9 +17,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>11.0</string>
+	<string>13.0</string>
 	<key>CFBundleVersion</key>
-	<string>110</string>
+	<string>130</string>
 	<key>CFBundleLocalizations</key>
 	<array>
 		<string>zh-Hans</string>
