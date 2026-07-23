@@ -7,7 +7,7 @@ struct RootTabView: View {
         TabView(selection: $tab) {
             ContentView()
                 .tabItem {
-                    Label("瘦身", systemImage: "flame.fill")
+                    Label("助手", systemImage: "sparkles")
                 }
                 .tag(0)
 

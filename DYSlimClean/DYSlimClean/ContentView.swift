@@ -19,6 +19,7 @@ struct ContentView: View {
                 VStack(spacing: 14) {
                     header
                     statusCard
+                    migrateCard
                     sizeCompareCard
                     statsRow
                     actionButtons
@@ -58,6 +59,11 @@ struct ContentView: View {
         } message: {
             Text(model.migrateResultText)
         }
+        .alert("票据迁移", isPresented: $model.showInstallMigrateResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.installMigrateText)
+        }
         .onAppear {
             model.bootstrap()
             model.floatEnabled = FloatingBallController.shared.isVisible
@@ -89,14 +95,14 @@ struct ContentView: View {
                     .frame(width: 52, height: 52)
                 VStack(spacing: 0) {
                     Text("DY").font(.system(size: 16, weight: .black)).foregroundColor(.white)
-                    Text("瘦身").font(.system(size: 10, weight: .bold)).foregroundColor(accent)
+                    Text("助手").font(.system(size: 10, weight: .bold)).foregroundColor(accent)
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("DY瘦身")
+                Text("DY助手")
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(.white)
-                Text("抖音沙盒精简 · 巨魔 / 多巴胺 RootHide")
+                Text("精简 · 票据迁移 · 巨魔 / 多巴胺 RootHide")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.55))
             }
@@ -133,6 +139,63 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private var migrateCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("一键迁移 _ttinstall_document")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.9))
+            Text("从抖音复制到目标 App 的 Documents/_ttinstall_document（不列出文件，只提示结果）")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.45))
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                ForEach(AppContainerLocator.migrateTargets) { app in
+                    Button {
+                        model.migrateInstallDoc(to: app)
+                    } label: {
+                        Text("迁移到\(app.title)")
+                            .font(.caption.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(Color(red: 0.16, green: 0.22, blue: 0.32))
+                            .foregroundColor(.white)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .disabled(model.isBusy)
+                }
+            }
+
+            Button {
+                model.migrateInstallDocAll()
+            } label: {
+                HStack {
+                    Image(systemName: "arrow.right.doc.on.clipboard")
+                    Text("一键迁移到全部目标")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.2, green: 0.75, blue: 0.55), Color(red: 0.15, green: 0.55, blue: 0.9)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .disabled(model.isBusy)
+        }
+        .padding(14)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(accent.opacity(0.2), lineWidth: 1)
         )
     }
 

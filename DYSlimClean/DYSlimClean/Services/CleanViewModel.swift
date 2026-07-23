@@ -22,6 +22,8 @@ final class CleanViewModel: ObservableObject {
     @Published var showConfirmDelete = false
     @Published var showMigrateResult = false
     @Published var migrateResultText = ""
+    @Published var showInstallMigrateResult = false
+    @Published var installMigrateText = ""
     @Published var floatEnabled = false
     @Published var offerCleanAfterScan = false
     @Published var logLines: [String] = []
@@ -111,6 +113,36 @@ final class CleanViewModel: ObservableObject {
                 self.migrateResultText = result.message
                 self.showMigrateResult = true
                 self.log(result.ok ? "移机修复已执行" : "移机修复部分失败，请看说明")
+            }
+        }
+    }
+
+    func migrateInstallDoc(to target: TargetApp) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "迁移中…"
+        Task.detached(priority: .userInitiated) {
+            let result = InstallDocMigrator.migrate(to: target)
+            await MainActor.run {
+                self.isBusy = false
+                self.installMigrateText = result.message
+                self.showInstallMigrateResult = true
+                self.log(result.ok ? "票据迁移成功 → \(target.title)" : "票据迁移失败 → \(target.title)")
+            }
+        }
+    }
+
+    func migrateInstallDocAll() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "一键迁移中…"
+        Task.detached(priority: .userInitiated) {
+            let result = InstallDocMigrator.migrateAll()
+            await MainActor.run {
+                self.isBusy = false
+                self.installMigrateText = result.message
+                self.showInstallMigrateResult = true
+                self.log(result.ok ? "一键票据迁移完成" : "一键票据迁移失败")
             }
         }
     }

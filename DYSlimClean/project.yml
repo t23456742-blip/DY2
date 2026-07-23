@@ -46,8 +46,8 @@ targets:
     info:
       path: DYSlimClean/Resources/Info.plist
       properties:
-        CFBundleDisplayName: DY瘦身
-        CFBundleName: DY瘦身
+        CFBundleDisplayName: DY助手
+        CFBundleName: DY助手
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleLocalizations:
           - zh-Hans

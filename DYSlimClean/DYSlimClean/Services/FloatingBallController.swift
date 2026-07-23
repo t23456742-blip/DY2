@@ -203,7 +203,7 @@ final class FloatPiPContentViewController: AVPictureInPictureVideoCallViewContro
             ball.setImage(img, for: .normal)
             ball.imageView?.contentMode = .scaleAspectFill
         } else {
-            ball.setTitle("DY瘦身", for: .normal)
+            ball.setTitle("DY助手", for: .normal)
             ball.titleLabel?.font = .systemFont(ofSize: 11, weight: .black)
             ball.titleLabel?.numberOfLines = 2
             ball.titleLabel?.textAlignment = .center
