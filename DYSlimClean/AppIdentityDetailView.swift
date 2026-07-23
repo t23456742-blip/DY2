@@ -91,13 +91,17 @@ struct AppIdentityDetailView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(
-                        cleanModel.oneTapSucceeded
-                        ? Color.green
-                        : LinearGradient(
-                            colors: [Color(red: 0.15, green: 0.75, blue: 0.45), Color(red: 0.1, green: 0.55, blue: 0.35)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                          )
+                        Group {
+                            if cleanModel.oneTapSucceeded {
+                                Color.green
+                            } else {
+                                LinearGradient(
+                                    colors: [Color(red: 0.15, green: 0.75, blue: 0.45), Color(red: 0.1, green: 0.55, blue: 0.35)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            }
+                        }
                     )
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
