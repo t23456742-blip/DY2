@@ -76,20 +76,15 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didScan)) { _ in
             NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "后台扫描中…")
             model.scan()
-            // 扫描结束后用状态条提示（由 scan 完成日志侧补发）
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                // 轻量轮询：忙完即提示
-                func poll() {
-                    if model.isBusy {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: poll)
-                    } else {
-                        NotificationCenter.default.post(
-                            name: Notification.Name("dy.slim.float.status"),
-                            object: model.extraCount > 0 ? "扫描完成" : "扫描完成·无多余"
-                        )
-                    }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                while model.isBusy {
+                    try? await Task.sleep(nanoseconds: 400_000_000)
                 }
-                poll()
+                NotificationCenter.default.post(
+                    name: Notification.Name("dy.slim.float.status"),
+                    object: model.extraCount > 0 ? "扫描完成" : "扫描完成·无多余"
+                )
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didSlim)) { _ in
