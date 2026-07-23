@@ -74,18 +74,7 @@ struct ContentView: View {
             model.floatEnabled = FloatingBallController.shared.isVisible
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didScan)) { _ in
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "后台扫描中…")
-            model.scan()
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                while model.isBusy {
-                    try? await Task.sleep(nanoseconds: 400_000_000)
-                }
-                NotificationCenter.default.post(
-                    name: Notification.Name("dy.slim.float.status"),
-                    object: model.extraCount > 0 ? "扫描完成" : "扫描完成·无多余"
-                )
-            }
+            model.scan(fromFloat: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didSlim)) { _ in
             model.requestSlimFromFloat()
@@ -366,7 +355,7 @@ struct ContentView: View {
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: model.floatEnabled ? "dot.circle.and.hand.point.up.left.fill" : "circle.dashed")
-                    Text(model.floatEnabled ? "关闭悬浮球" : "打开悬浮球")
+                    Text(model.floatEnabled ? "关闭全局悬浮" : "打开全局悬浮")
                         .fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)
