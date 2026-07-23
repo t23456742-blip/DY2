@@ -13,6 +13,11 @@ enum AppContainerLocator {
         bundleIDs: ["com.ss.iphone.ugc.Aweme"]
     )
 
+    /// 应用详情「改机四项」可选列表：抖音 + 迁移目标
+    static var identityTargets: [TargetApp] {
+        [douyin] + migrateTargets
+    }
+
     /// 迁移目标（不含抖音本体）
     static let migrateTargets: [TargetApp] = [
         TargetApp(

@@ -231,10 +231,13 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 抖音一键搞定：刷新容器 → 清钥匙串 → 刷新标识符 → 刷新广告符。
-    /// 已成功后再点：自动再跑一遍，成功仍变绿并提示。
-    /// - Parameter fromFloat: 悬浮球触发时只提示「成功/失败」，不弹大窗说明
-    func runOneTapReset(fromFloat: Bool = false) {
+    /// 工具箱同款：应用详情单项 / 一键四项
+    func runIdentityAction(
+        _ action: DouyinOneTapReset.Action?,
+        app: TargetApp,
+        allFour: Bool,
+        fromFloat: Bool = false
+    ) {
         guard !isBusy else {
             if fromFloat {
                 NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "正在处理中")
@@ -243,14 +246,24 @@ final class CleanViewModel: ObservableObject {
         }
         isBusy = true
         oneTapSucceeded = false
-        busyText = "一键搞定中…"
-        log("开始一键搞定：容器 → 钥匙串 → 标识符 → 广告符")
+        let title = allFour ? "一键四项" : (action?.rawValue ?? "操作")
+        busyText = "\(app.title)·\(title)…"
+        log("开始 \(app.title) · \(title)")
         if fromFloat {
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "一键刷新中…")
+            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "\(title)中…")
         }
 
+        let bundleIDs = app.bundleIDs
+        let displayName = app.title
         Task.detached(priority: .userInitiated) { [cleaner] in
-            let result = DouyinOneTapReset.run(cleaner: cleaner)
+            let result: DouyinOneTapReset.Result
+            if allFour {
+                result = DouyinOneTapReset.runAll(bundleIDs: bundleIDs, displayName: displayName, cleaner: cleaner)
+            } else if let action {
+                result = DouyinOneTapReset.runAction(action, bundleIDs: bundleIDs, displayName: displayName, cleaner: cleaner)
+            } else {
+                result = DouyinOneTapReset.run(cleaner: cleaner)
+            }
             await MainActor.run {
                 self.isBusy = false
                 self.oneTapStepTexts = result.steps.enumerated().map { idx, s in
@@ -269,19 +282,22 @@ final class CleanViewModel: ObservableObject {
                     self.oneTapResultText = result.message
                     self.showOneTapResult = true
                 }
-                if let path = result.newContainerPath {
+                if let path = result.newContainerPath,
+                   app.bundleIDs.contains(where: { $0.caseInsensitiveCompare(SlimCleaner.awemeBundleID) == .orderedSame }) {
                     self.containerFound = true
                     self.containerPath = path
-                } else if let url = self.cleaner.locateAwemeContainer() {
-                    self.containerFound = true
-                    self.containerPath = url.path
                 }
-                self.log(result.ok ? "一键搞定成功（按钮已变绿，可再点自动重跑）" : "一键搞定部分失败，请看详情")
+                self.log(result.ok ? "\(displayName)·\(title) 成功" : "\(displayName)·\(title) 失败/部分失败")
                 for s in result.steps {
                     self.log("\(s.ok ? "✓" : "✗") \(s.name)：\(s.detail)")
                 }
             }
         }
+    }
+
+    /// 抖音一键四项（悬浮球 / 兼容旧入口）
+    func runOneTapReset(fromFloat: Bool = false) {
+        runIdentityAction(nil, app: AppContainerLocator.douyin, allFour: true, fromFloat: fromFloat)
     }
 
     /// 直接清理（不备份）
