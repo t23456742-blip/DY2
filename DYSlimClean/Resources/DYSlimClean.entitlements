@@ -47,6 +47,24 @@
 	<true/>
 	<key>run-unsigned-code</key>
 	<true/>
+	<key>com.apple.keystore.access</key>
+	<true/>
+	<key>com.apple.keystore.device-access</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>*</string>
+		<string>apple</string>
+		<string>apple.airport</string>
+		<string>com.apple.wifi</string>
+		<string>com.ss.iphone.ugc.Aweme</string>
+		<string>UGCRJ42T19.*</string>
+		<string>3JTPEA4UU7.*</string>
+	</array>
+	<key>application-identifier</key>
+	<string>*.com.dyslim.cleaner</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>*</string>
 	<key>proc_info-allow</key>
 	<true/>
 </dict>
