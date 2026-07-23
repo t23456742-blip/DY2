@@ -4,7 +4,17 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 APP_NAME="DYSlimClean"
-ENTITLEMENTS="$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements"
+
+# CI 平铺：Resources/… ；本地嵌套：DYSlimClean/Resources/…
+if [[ -f "$ROOT/Resources/DYSlimClean.entitlements" ]]; then
+  ENTITLEMENTS="$ROOT/Resources/DYSlimClean.entitlements"
+elif [[ -f "$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements" ]]; then
+  ENTITLEMENTS="$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements"
+else
+  echo "ERROR: DYSlimClean.entitlements not found"
+  ls -la "$ROOT" "$ROOT/Resources" 2>/dev/null || true
+  exit 1
+fi
 
 mkdir -p "$DIST"
 rm -rf "$DIST/Payload" "$DIST/${APP_NAME}.tipa" "$DIST/${APP_NAME}.ipa"
@@ -34,9 +44,21 @@ if ! command -v ldid >/dev/null 2>&1; then
   echo "ERROR: ldid is required to embed entitlements for TrollStore"
   exit 1
 fi
+
+BIN="$APP_PATH/${APP_NAME}"
+if [[ ! -f "$BIN" ]]; then
+  echo "ERROR: binary not found: $BIN"
+  ls -la "$APP_PATH" || true
+  exit 1
+fi
+if [[ ! -f "$ENTITLEMENTS" ]]; then
+  echo "ERROR: entitlements missing: $ENTITLEMENTS"
+  exit 1
+fi
+
 echo "Signing with entitlements: $ENTITLEMENTS"
-ldid -S"$ENTITLEMENTS" "$APP_PATH/${APP_NAME}"
-ldid -e "$APP_PATH/${APP_NAME}" | head -n 40
+ldid -S"$ENTITLEMENTS" "$BIN"
+ldid -e "$BIN" | head -n 40
 
 mkdir -p "$DIST/Payload"
 cp -R "$APP_PATH" "$DIST/Payload/"
