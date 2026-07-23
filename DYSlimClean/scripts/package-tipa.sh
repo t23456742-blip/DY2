@@ -4,7 +4,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 APP_NAME="DYSlimClean"
-ENTITLEMENTS="$ROOT/Resources/DYSlimClean.entitlements"
+ENTITLEMENTS="$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements"
 
 mkdir -p "$DIST"
 rm -rf "$DIST/Payload" "$DIST/${APP_NAME}.tipa" "$DIST/${APP_NAME}.ipa"
@@ -22,8 +22,8 @@ fi
 echo "Using app: $APP_PATH"
 
 # 强制写入版本号（避免 CI 里 $(MARKETING_VERSION) 未展开变成默认 1.0）
-MARKETING_VERSION="${MARKETING_VERSION:-11.0}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-110}"
+MARKETING_VERSION="${MARKETING_VERSION:-13.0}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-130}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
