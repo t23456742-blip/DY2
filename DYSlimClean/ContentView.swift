@@ -111,7 +111,7 @@ struct ContentView: View {
                     Text("DY助手")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "8.0")")
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "13.0")")
                         .font(.caption.weight(.bold))
                         .foregroundColor(accent)
                 }

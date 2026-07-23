@@ -11,68 +11,129 @@ struct RulesView: View {
     private let bgBottom = Color(red: 0.08, green: 0.10, blue: 0.16)
 
     var body: some View {
-        ZStack {
-            LinearGradient(colors: [bgTop, bgBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
-                .ignoresSafeArea()
+        NavigationView {
+            ZStack {
+                LinearGradient(colors: [bgTop, bgBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                header
-                oneTapResetCard
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 8)
-                explainCard
-                profileBar
-                modeBar
-                actionBar
-                Text(model.statusText)
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.55))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 6)
+                // List 在 TabView 里滚动最稳（比嵌套 ScrollView 可靠）
+                List {
+                    Section {
+                        ForEach(AppContainerLocator.identityTargets) { app in
+                            NavigationLink(destination: AppIdentityDetailView(app: app, cleanModel: cleanModel)) {
+                                appRow(app)
+                            }
+                            .listRowBackground(card)
+                            .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                        }
+                    } header: {
+                        Text("应用详情 · 改机四项").foregroundColor(accent)
+                    } footer: {
+                        Text("点进某个 App：四项可单独执行，也可「一键刷新四项」。")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.4))
+                    }
 
-                if model.isBusy {
-                    ProgressView("正在加载抖音目录…")
-                        .tint(accent)
-                        .foregroundColor(.white)
-                        .padding(.top, 40)
-                    Spacer()
-                } else {
-                    list
+                    Section {
+                        explainCardContent
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(card)
+                    } header: {
+                        Text("瘦身规则").foregroundColor(accent)
+                    }
+
+                    Section {
+                        profileBarContent
+                            .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                        modeBar
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                        actionBar
+                            .listRowInsets(EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                        Text(model.statusText)
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.55))
+                            .listRowBackground(Color.clear)
+                            .listRowSeparator(.hidden)
+                    } header: {
+                        Text("规则选用").foregroundColor(.white.opacity(0.5))
+                    }
+
+                    Section {
+                        if model.isBusy {
+                            HStack {
+                                Spacer()
+                                ProgressView("正在加载抖音目录…").tint(accent).foregroundColor(.white)
+                                Spacer()
+                            }
+                            .listRowBackground(Color.clear)
+                        } else if model.nodes.isEmpty {
+                            Text("暂无目录节点，点「刷新目录」")
+                                .foregroundColor(.white.opacity(0.5))
+                                .listRowBackground(Color.clear)
+                        } else {
+                            ForEach(model.nodes) { node in
+                                row(node)
+                                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+                                    .listRowBackground(card)
+                            }
+                        }
+                    } header: {
+                        Text("目录树（可上下滑）").foregroundColor(.white.opacity(0.5))
+                    }
                 }
-            }
-
-            if !model.toast.isEmpty {
-                VStack {
-                    Spacer()
-                    Text(model.toast)
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(Color.black.opacity(0.82))
-                        .clipShape(Capsule())
-                        .padding(.bottom, 28)
-                }
+                .listStyle(.plain)
                 .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { model.toast = "" }
+                    UITableView.appearance().backgroundColor = .clear
+                    UITableViewCell.appearance().backgroundColor = .clear
+                }
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    header
+                        .background(
+                            LinearGradient(colors: [bgTop.opacity(0.95), bgTop.opacity(0.8)], startPoint: .top, endPoint: .bottom)
+                        )
+                }
+
+                if !model.toast.isEmpty {
+                    VStack {
+                        Spacer()
+                        Text(model.toast)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(Color.black.opacity(0.82))
+                            .clipShape(Capsule())
+                            .padding(.bottom, 28)
+                    }
+                    .allowsHitTesting(false)
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { model.toast = "" }
+                    }
                 }
             }
+            .preferredColorScheme(.dark)
+            .navigationBarHidden(true)
+            .onAppear { model.bootstrap() }
+            .alert("永久保存为新规则", isPresented: $model.showSaveAs) {
+                TextField("规则名称", text: $model.saveAsName)
+                Button("取消", role: .cancel) {}
+                Button("保存") { model.confirmSaveAs() }
+            } message: {
+                Text(model.saveAsFavorite ? "将写入本机永久收藏规则" : "将永久保存，可在上方切换选用")
+            }
+            .alert("改机结果", isPresented: $cleanModel.showOneTapResult) {
+                Button("好的", role: .cancel) {}
+            } message: {
+                Text(cleanModel.oneTapResultText)
+            }
         }
-        .preferredColorScheme(.dark)
-        .onAppear { model.bootstrap() }
-        .alert("永久保存为新规则", isPresented: $model.showSaveAs) {
-            TextField("规则名称", text: $model.saveAsName)
-            Button("取消", role: .cancel) {}
-            Button("保存") { model.confirmSaveAs() }
-        } message: {
-            Text(model.saveAsFavorite ? "将写入本机永久收藏规则" : "将永久保存，可在上方切换选用")
-        }
-        .alert("一键搞定", isPresented: $cleanModel.showOneTapResult) {
-            Button("好的", role: .cancel) {}
-        } message: {
-            Text(cleanModel.oneTapResultText)
-        }
+        .navigationViewStyle(.stack)
     }
 
     private var header: some View {
@@ -81,7 +142,7 @@ struct RulesView: View {
                 Text("工具 · 规则")
                     .font(.title3.weight(.bold))
                     .foregroundColor(.white)
-                Text("一键搞定 · 瘦身保留规则")
+                Text("应用详情改机 · 瘦身规则 · 可滑动")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.5))
             }
@@ -97,158 +158,82 @@ struct RulesView: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 12)
+        .padding(.top, 8)
         .padding(.bottom, 8)
     }
 
-    private var oneTapResetCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("抖音 · 一键搞定")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.9))
-                Spacer()
-                if cleanModel.oneTapSucceeded {
-                    Text("已成功")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.green.opacity(0.25))
-                        .foregroundColor(Color.green)
-                        .clipShape(Capsule())
-                }
-            }
-            Text("顺序：刷新容器 → 清钥匙串 → 刷新标识符 → 刷新广告符。成功后按钮变绿；再点会自动再跑一遍。")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.45))
-
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(cleanModel.oneTapStepTexts.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.caption2.monospaced())
-                        .foregroundColor(cleanModel.oneTapSucceeded ? Color.green.opacity(0.9) : .white.opacity(0.55))
-                }
-            }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.black.opacity(0.25))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-            Button {
-                cleanModel.runOneTapReset()
-            } label: {
-                HStack(spacing: 8) {
-                    if cleanModel.isBusy && cleanModel.busyText.contains("一键搞定") {
-                        ProgressView().tint(.white)
-                    } else {
-                        Image(systemName: cleanModel.oneTapSucceeded ? "checkmark.circle.fill" : "bolt.fill")
-                    }
-                    Text(cleanModel.oneTapSucceeded ? "再跑一遍 · 一键搞定" : "一键搞定")
-                        .fontWeight(.bold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    Group {
-                        if cleanModel.oneTapSucceeded {
-                            Color.green
-                        } else {
-                            LinearGradient(
-                                colors: [Color(red: 0.15, green: 0.75, blue: 0.45), Color(red: 0.1, green: 0.55, blue: 0.35)],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        }
-                    }
+    private func appRow(_ app: TargetApp) -> some View {
+        let hit = AppContainerLocator.locateContainer(bundleIDs: app.bundleIDs)
+        return HStack(spacing: 12) {
+            Circle()
+                .fill(accent.opacity(0.22))
+                .frame(width: 40, height: 40)
+                .overlay(
+                    Image(systemName: hit == nil ? "app.dashed" : "app.fill")
+                        .foregroundColor(hit == nil ? .white.opacity(0.35) : accent)
                 )
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(app.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white)
+                Text(hit?.bundleID ?? (app.bundleIDs.first ?? app.id))
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.white.opacity(0.45))
+                    .lineLimit(1)
             }
-            .disabled(cleanModel.isBusy)
+            Spacer()
+            Text(hit == nil ? "未找到" : "详情")
+                .font(.caption2.weight(.bold))
+                .foregroundColor(hit == nil ? .orange : accent)
         }
-        .padding(14)
-        .background(card)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(cleanModel.oneTapSucceeded ? Color.green.opacity(0.55) : accent.opacity(0.25), lineWidth: 1)
-        )
+        .padding(.vertical, 4)
     }
 
-    private var explainCard: some View {
+    private var explainCardContent: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("瘦身规则说明")
-                .font(.caption.weight(.bold))
-                .foregroundColor(accent)
             Text("✓ 勾选 = 瘦身时保留　　○ 不勾选 = 瘦身时删除")
                 .font(.caption)
                 .foregroundColor(.white.opacity(0.85))
-            Text("默认精简 = 指定 Documents 文件夹 + 精简包白名单；可在其上追加保留，或完全自定义。保存规则会永久写入本机。")
+            Text("默认精简 = 指定 Documents 文件夹 + 精简包白名单。_ttinstall 与商城/搜索强制保留。")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.5))
-            Text("_ttinstall_document 与商城/搜索关键目录强制保留（橙色勾），无法取消。")
-                .font(.caption2)
-                .foregroundColor(.orange.opacity(0.9))
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(card)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
+        .padding(.vertical, 8)
     }
 
-    private var profileBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("规则选用（含收藏）")
-                .font(.caption2)
-                .foregroundColor(.white.opacity(0.45))
-                .padding(.horizontal, 16)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(model.profiles) { p in
-                        Button {
-                            model.selectProfile(p.id)
-                        } label: {
-                            HStack(spacing: 4) {
-                                if p.isFavorite {
-                                    Image(systemName: "star.fill").font(.caption2)
-                                }
-                                Text(p.name)
-                                    .font(.caption.weight(.semibold))
-                                    .lineLimit(1)
+    private var profileBarContent: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(model.profiles) { p in
+                    Button {
+                        model.selectProfile(p.id)
+                    } label: {
+                        HStack(spacing: 4) {
+                            if p.isFavorite {
+                                Image(systemName: "star.fill").font(.caption2)
                             }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(p.id == model.activeId ? accent.opacity(0.25) : card)
-                            .foregroundColor(p.id == model.activeId ? accent : .white)
-                            .clipShape(Capsule())
-                            .overlay(
-                                Capsule().stroke(p.id == model.activeId ? accent.opacity(0.6) : Color.clear, lineWidth: 1)
-                            )
+                            Text(p.name)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
                         }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(p.id == model.activeId ? accent.opacity(0.25) : card)
+                        .foregroundColor(p.id == model.activeId ? accent : .white)
+                        .clipShape(Capsule())
                     }
                 }
-                .padding(.horizontal, 16)
             }
+            .padding(.horizontal, 16)
         }
-        .padding(.bottom, 8)
     }
 
     private var modeBar: some View {
         HStack(spacing: 8) {
-            modeChip("默认精简", selected: model.editMode == .defaultSlim) {
-                model.useDefaultSlim()
-            }
-            modeChip("精简+追加", selected: model.editMode == .defaultPlus) {
-                model.switchToDefaultPlusEditing()
-            }
-            modeChip("完全自定义", selected: model.editMode == .fullCustom) {
-                model.switchToFullCustomEditing()
-            }
+            modeChip("默认精简", selected: model.editMode == .defaultSlim) { model.useDefaultSlim() }
+            modeChip("精简+追加", selected: model.editMode == .defaultPlus) { model.switchToDefaultPlusEditing() }
+            modeChip("完全自定义", selected: model.editMode == .fullCustom) { model.switchToFullCustomEditing() }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 8)
     }
 
     private func modeChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -275,8 +260,6 @@ struct RulesView: View {
                 toolBtn("回默认精简", "arrow.counterclockwise") { model.useDefaultSlim() }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 4)
     }
 
     private func toolBtn(_ title: String, _ icon: String, _ action: @escaping () -> Void) -> some View {
@@ -290,21 +273,6 @@ struct RulesView: View {
             .background(card)
             .foregroundColor(.white)
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-    }
-
-    private var list: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(model.nodes) { node in
-                    row(node)
-                    Divider().background(Color.white.opacity(0.06))
-                }
-            }
-            .background(card)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .padding(.horizontal, 16)
-            .padding(.bottom, 28)
         }
     }
 
@@ -332,9 +300,7 @@ struct RulesView: View {
                         Button {
                             model.toggleExpand(node.id)
                         } label: {
-                            Text(node.name)
-                                .font(.subheadline)
-                                .foregroundColor(.white)
+                            Text(node.name).font(.subheadline).foregroundColor(.white)
                         }
                         .buttonStyle(.plain)
                     } else {
@@ -372,8 +338,7 @@ struct RulesView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
+        .padding(.vertical, 6)
     }
 }
 
