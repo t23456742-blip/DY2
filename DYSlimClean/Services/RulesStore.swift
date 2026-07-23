@@ -161,7 +161,11 @@ final class RulesStore {
     }
 
     func isKeptByActiveRules(_ rel: String, defaultKeep: (String) -> Bool) -> Bool {
+        let rel = rel.replacingOccurrences(of: "\\", with: "/")
         if rel == "Documents/_ttinstall_document" || rel.hasPrefix("Documents/_ttinstall_document/") {
+            return true
+        }
+        if SlimCleaner.isMallSearchProtected(rel) {
             return true
         }
         let p = activeProfile
@@ -172,13 +176,22 @@ final class RulesStore {
             if defaultKeep(rel) { return true }
             return matched(rel, in: Set(p.paths))
         case .fullCustom:
+            // 勾选目录 = 整夹保留（含子路径）
             return matched(rel, in: Set(p.paths))
         }
     }
 
     private func matched(_ rel: String, in paths: Set<String>) -> Bool {
         if paths.contains(rel) { return true }
-        for p in paths where rel.hasPrefix(p + "/") { return true }
+        for p in paths {
+            let p = p.replacingOccurrences(of: "\\", with: "/")
+            if rel == p || rel.hasPrefix(p + "/") { return true }
+            // 若勾选了父路径 Documents / Library，整棵保留
+            if (p == "Documents" || p == "Library" || p == "tmp"),
+               rel == p || rel.hasPrefix(p + "/") {
+                return true
+            }
+        }
         return false
     }
 

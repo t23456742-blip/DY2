@@ -221,12 +221,21 @@ final class CleanViewModel: ObservableObject {
 
     /// 抖音一键搞定：刷新容器 → 清钥匙串 → 刷新标识符 → 刷新广告符。
     /// 已成功后再点：自动再跑一遍，成功仍变绿并提示。
-    func runOneTapReset() {
-        guard !isBusy else { return }
+    /// - Parameter fromFloat: 悬浮球触发时只提示「成功/失败」，不弹大窗说明
+    func runOneTapReset(fromFloat: Bool = false) {
+        guard !isBusy else {
+            if fromFloat {
+                NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "正在处理中")
+            }
+            return
+        }
         isBusy = true
         oneTapSucceeded = false
         busyText = "一键搞定中…"
         log("开始一键搞定：容器 → 钥匙串 → 标识符 → 广告符")
+        if fromFloat {
+            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "一键刷新中…")
+        }
 
         Task.detached(priority: .userInitiated) { [cleaner] in
             let result = DouyinOneTapReset.run(cleaner: cleaner)
@@ -237,8 +246,17 @@ final class CleanViewModel: ObservableObject {
                     return "\(idx + 1). \(mark) \(s.name) · \(s.detail)"
                 }
                 self.oneTapSucceeded = result.ok
-                self.oneTapResultText = result.message
-                self.showOneTapResult = true
+                if fromFloat {
+                    self.oneTapResultText = result.ok ? "成功" : "失败"
+                    self.showOneTapResult = false
+                    NotificationCenter.default.post(
+                        name: Notification.Name("dy.slim.float.status"),
+                        object: result.ok ? "成功" : "失败"
+                    )
+                } else {
+                    self.oneTapResultText = result.message
+                    self.showOneTapResult = true
+                }
                 if let path = result.newContainerPath {
                     self.containerFound = true
                     self.containerPath = path

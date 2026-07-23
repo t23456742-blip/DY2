@@ -186,7 +186,7 @@ struct RulesView: View {
             Text("默认精简 = 指定 Documents 文件夹 + 精简包白名单；可在其上追加保留，或完全自定义。保存规则会永久写入本机。")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.5))
-            Text("_ttinstall_document 强制保留（橙色勾），无法取消。")
+            Text("_ttinstall_document 与商城/搜索关键目录强制保留（橙色勾），无法取消。")
                 .font(.caption2)
                 .foregroundColor(.orange.opacity(0.9))
         }

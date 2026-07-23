@@ -95,6 +95,9 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didSlim)) { _ in
             model.requestSlimFromFloat()
         }
+        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didOneTap)) { _ in
+            model.runOneTapReset(fromFloat: true)
+        }
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.visibilityChanged)) { note in
             if let on = note.object as? Bool {
                 model.floatEnabled = on
@@ -141,7 +144,7 @@ struct ContentView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                 Spacer()
-                Text("规则已加固")
+                Text("规则已加固·商城优先")
                     .font(.caption2.weight(.medium))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -149,7 +152,7 @@ struct ContentView: View {
                     .foregroundColor(accent)
                     .clipShape(Capsule())
             }
-            Text(model.containerPath.isEmpty ? "Documents 指定文件夹保留 · _ttinstall 不删 · 其余按精简包" : model.containerPath)
+            Text(model.containerPath.isEmpty ? "优先保证抖音商城+搜索 · _ttinstall 不删 · 其余按精简包" : model.containerPath)
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
                 .lineLimit(2)

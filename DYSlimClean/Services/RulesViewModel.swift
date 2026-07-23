@@ -31,12 +31,14 @@ final class RulesViewModel: ObservableObject {
         "Documents": "用户文档/数据库/mmkv 等",
         "Library": "缓存、偏好设置、资源",
         "tmp": "临时文件，精简时通常可删",
-        "Documents/mmkv": "关键配置存储，默认保留",
+        "Documents/mmkv": "关键配置存储，商城相关强制保留",
         "Documents/_ttinstall_document": "安装票据，强制保留不可取消",
         "Documents/_bdticketguard_document": "票据防护，默认保留",
         "Library/Preferences": "偏好设置，移机/粘贴相关，默认保留",
-        "Library/Caches": "缓存目录，精简时常删",
-        "Library/Application Support": "应用支持文件，体积大",
+        "Library/Caches": "缓存目录；商城 aweecom / WebKit 子树强制保留",
+        "Library/Application Support": "商城 gurd/gecko/电商资源，强制保留",
+        "Library/Pitaya": "商城/搜索包，强制保留",
+        "Library/WebKit": "商城 H5/搜索 WebView，强制保留",
         "Library/AWEIMRoot": "私信/表情等资源"
     ]
 
@@ -62,9 +64,9 @@ final class RulesViewModel: ObservableObject {
         editMode = p.mode
         switch p.mode {
         case .defaultSlim:
-            checked = SlimCleaner.defaultCheckedPaths()
+            checked = cleaner.defaultCheckedPathsFull()
         case .defaultPlus:
-            checked = SlimCleaner.defaultCheckedPaths().union(p.paths)
+            checked = cleaner.defaultCheckedPathsFull().union(p.paths)
         case .fullCustom:
             checked = Set(p.paths)
         }
@@ -152,7 +154,11 @@ final class RulesViewModel: ObservableObject {
     }
 
     func isForced(_ path: String) -> Bool {
-        path == "Documents/_ttinstall_document" || path.hasPrefix("Documents/_ttinstall_document/")
+        if path == "Documents/_ttinstall_document" || path.hasPrefix("Documents/_ttinstall_document/") {
+            return true
+        }
+        // 商城/搜索关键目录不允许取消
+        return SlimCleaner.isMallSearchProtected(path)
     }
 
     func isEffectivelyChecked(_ path: String) -> Bool {
@@ -185,7 +191,7 @@ final class RulesViewModel: ObservableObject {
         case .defaultPlus:
             mode = .defaultPlus
             // 只存「超出默认」的额外项
-            let base = SlimCleaner.defaultCheckedPaths()
+            let base = cleaner.defaultCheckedPathsFull()
             paths = checked.subtracting(base)
         case .fullCustom:
             mode = .fullCustom
@@ -210,7 +216,7 @@ final class RulesViewModel: ObservableObject {
         let mode = (editMode == .defaultSlim) ? RuleMode.defaultPlus : editMode
         let paths: Set<String> = {
             if mode == .defaultPlus {
-                return checked.subtracting(SlimCleaner.defaultCheckedPaths())
+                return checked.subtracting(cleaner.defaultCheckedPathsFull())
             }
             return checked
         }()
@@ -239,7 +245,7 @@ final class RulesViewModel: ObservableObject {
         // 以当前有效勾选为起点
         var all = checked
         // 把默认会保留的也标上，方便用户从精简改起
-        all.formUnion(SlimCleaner.defaultCheckedPaths())
+        all.formUnion(cleaner.defaultCheckedPathsFull())
         checked = all
         checked.insert("Documents/_ttinstall_document")
         toast = "完全自定义：只保留打钩项，其余删除"
@@ -248,7 +254,7 @@ final class RulesViewModel: ObservableObject {
 
     func switchToDefaultPlusEditing() {
         editMode = .defaultPlus
-        checked = SlimCleaner.defaultCheckedPaths().union(checked)
+        checked = cleaner.defaultCheckedPathsFull().union(checked)
         checked.insert("Documents/_ttinstall_document")
         toast = "在默认精简上追加保留：多勾的会额外留下"
         statusText = statusLine()

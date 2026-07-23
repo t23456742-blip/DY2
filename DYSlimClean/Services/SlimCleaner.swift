@@ -35,7 +35,7 @@ final class SlimCleaner: @unchecked Sendable {
         ".com.apple.mobile_container_manager.metadata.plist"
     ]
 
-    /// Documents 下整夹保留（截图精简结构）；其中 _ttinstall_document 内文件一律不删
+    /// Documents 下整夹保留（截图精简结构 + 参考包目录）；其中 _ttinstall_document 内文件一律不删
     static let documentsKeepFolders: [String] = [
         "Documents/_bdticketguard_document",
         "Documents/_ttinstall_document",
@@ -65,13 +65,32 @@ final class SlimCleaner: @unchecked Sendable {
         "Documents/ttaccountSDKUserInfo.archiver"
     ]
 
-    /// 移机/粘贴相关：整夹保留，避免恢复后复制粘贴异常
+    /// 移机/粘贴相关：整夹保留
     static let libraryKeepFolders: [String] = [
         "Library/Preferences",
         "Library/SyncedPreferences"
     ]
 
+    /// 抖音商城 + 搜索：强制整夹保留（比精简包更宽，保证商城可用）
+    static let mallSearchKeepFolders: [String] = [
+        "Library/Pitaya",                 // 商城/搜索前端包、策略模型
+        "Library/WebKit",                 // 商城 H5 / 搜索 WebView
+        "Library/BDXBridgeAuthConfig",    // 杂交/Lynx 桥鉴权
+        "Library/AWEFileKit",             // 资源通道元数据
+        "Library/Application Support",    // gurd：ecommerce / gecko / morphling_ecom / lynx
+        "Library/HTTPStorages",
+        "Library/Cookies",
+        "Library/Preferences",
+        "Library/SyncedPreferences",
+        "Documents/mmkv",
+        "Documents/com.bytedance.ies",
+        "Documents/_ttinstall_document"
+    ]
+
     let keepList: Set<String>
+    /// 从 keep_paths 推导的整夹前缀（Documents/X、Library/X、tmp/X）
+    /// 解决参考包里 hash 路径与手机不一致时被误删的问题
+    let keepDirPrefixes: Set<String>
 
     init(keepListURL: URL? = nil) {
         if let url = keepListURL ?? Bundle.main.url(forResource: "keep_paths", withExtension: "txt"),
@@ -79,16 +98,74 @@ final class SlimCleaner: @unchecked Sendable {
             keepList = Set(
                 text
                     .split(whereSeparator: \.isNewline)
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\\", with: "/") }
                     .filter { !$0.isEmpty && !$0.hasPrefix("#") }
             )
         } else {
             keepList = []
         }
+        keepDirPrefixes = Self.buildKeepDirPrefixes(from: keepList)
+    }
+
+    /// 从白名单文件路径提取「二级目录」整夹保留，例如 Library/AWEIMRoot、Library/Application Support
+    private static func buildKeepDirPrefixes(from keepList: Set<String>) -> Set<String> {
+        var dirs = Set<String>()
+        dirs.formUnion(documentsKeepFolders)
+        dirs.formUnion(libraryKeepFolders)
+        dirs.formUnion(mallSearchKeepFolders)
+        for p in keepList {
+            let parts = p.split(separator: "/").map(String.init)
+            guard parts.count >= 2 else { continue }
+            let root = parts[0]
+            guard root == "Documents" || root == "Library" || root == "tmp" else { continue }
+            // Documents/Aweme.db 这类根文件不当作目录前缀
+            if parts.count == 2, root == "Documents", documentsKeepFiles.contains(p) {
+                continue
+            }
+            if parts.count == 2, root == "Library", p.hasSuffix(".dat") {
+                continue
+            }
+            dirs.insert(root + "/" + parts[1])
+        }
+        return dirs
+    }
+
+    /// 商城/搜索相关路径：任意规则模式下强制保留
+    static func isMallSearchProtected(_ rel: String) -> Bool {
+        let rel = rel.replacingOccurrences(of: "\\", with: "/")
+        for folder in mallSearchKeepFolders {
+            if rel == folder || rel.hasPrefix(folder + "/") {
+                return true
+            }
+        }
+        let lower = rel.lowercased()
+        // Caches 不全留，只留商城/搜索必要子树
+        if lower.hasPrefix("library/caches/aweecom") { return true }
+        if lower.hasPrefix("library/caches/webkit") { return true }
+        if lower.contains("/ecommerce") || lower.contains("ecommerce_") { return true }
+        if lower.contains("morphling_ecom") { return true }
+        if lower.contains("gecko_core") || lower.contains("/gecko/") { return true }
+        if lower.contains("ecom_search")
+            || lower.contains("aweme_ecom_search")
+            || lower.contains("general_search")
+            || lower.contains("mall_search")
+            || lower.contains("ecom_mall") {
+            return true
+        }
+        if lower.contains("/lynx") || lower.contains("lynx-") || lower.contains("annie") {
+            // 仅限商城资源相关根目录，避免误留无关临时文件
+            if lower.hasPrefix("library/application support/")
+                || lower.hasPrefix("library/pitaya/")
+                || lower.hasPrefix("library/caches/") {
+                return true
+            }
+        }
+        return false
     }
 
     /// 是否应保留
     func shouldKeep(relativePath rel: String) -> Bool {
+        let rel = rel.replacingOccurrences(of: "\\", with: "/")
         if Self.protectedNames.contains((rel as NSString).lastPathComponent) {
             return true
         }
@@ -97,26 +174,35 @@ final class SlimCleaner: @unchecked Sendable {
             || rel.hasPrefix("Documents/_ttinstall_document/") {
             return true
         }
+        // 抖音商城 + 搜索：永远不删
+        if Self.isMallSearchProtected(rel) {
+            return true
+        }
 
         let store = RulesStore.shared
         return store.isKeptByActiveRules(rel) { self.defaultShouldKeep(relativePath: $0) }
     }
 
     func defaultShouldKeep(relativePath rel: String) -> Bool {
-        for folder in Self.documentsKeepFolders {
+        let rel = rel.replacingOccurrences(of: "\\", with: "/")
+        if Self.isMallSearchProtected(rel) {
+            return true
+        }
+        // 1) 参考包推导的整夹 + 内置整夹
+        for folder in keepDirPrefixes {
             if rel == folder || rel.hasPrefix(folder + "/") {
                 return true
             }
         }
-        for folder in Self.libraryKeepFolders {
-            if rel == folder || rel.hasPrefix(folder + "/") {
-                return true
-            }
-        }
+        // 2) Documents 根文件
         if Self.documentsKeepFiles.contains(rel) {
             return true
         }
-        return keepList.contains(rel)
+        // 3) 白名单精确路径
+        if keepList.contains(rel) {
+            return true
+        }
+        return false
     }
 
     /// 默认规则勾选项（供规则页展示）
@@ -124,6 +210,12 @@ final class SlimCleaner: @unchecked Sendable {
         Set(documentsKeepFolders)
             .union(documentsKeepFiles)
             .union(libraryKeepFolders)
+            .union(mallSearchKeepFolders)
+    }
+
+    /// 含 keep_paths 目录前缀的完整默认勾选
+    func defaultCheckedPathsFull() -> Set<String> {
+        Self.defaultCheckedPaths().union(keepDirPrefixes).union(Self.mallSearchKeepFolders)
     }
 
     func locateAwemeContainer() -> URL? {

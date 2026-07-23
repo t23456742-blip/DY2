@@ -5,10 +5,11 @@ import SwiftUI
 enum FloatingAction {
     static let didScan = Notification.Name("dy.slim.float.scan")
     static let didSlim = Notification.Name("dy.slim.float.slim")
+    static let didOneTap = Notification.Name("dy.slim.float.onetap")
     static let visibilityChanged = Notification.Name("dy.slim.float.visibility")
 }
 
-/// 小悬浮球：可拖动 · 点开三项 · 后台扫描/清理 · 不用画中画（避免跳出应用）
+/// 小悬浮球：可拖动 · 点开菜单 · 后台处理 · 不用画中画（避免跳出应用）
 final class FloatingBallController: NSObject {
     static let shared = FloatingBallController()
 
@@ -89,6 +90,9 @@ final class FloatingBallController: NSObject {
         root.onClean = {
             NotificationCenter.default.post(name: FloatingAction.didSlim, object: nil)
         }
+        root.onOneTap = {
+            NotificationCenter.default.post(name: FloatingAction.didOneTap, object: nil)
+        }
         root.onToggleFloat = { [weak self] in
             self?.hide()
         }
@@ -147,6 +151,7 @@ final class FloatingBallController: NSObject {
 final class CompactFloatViewController: UIViewController {
     var onScan: (() -> Void)?
     var onClean: (() -> Void)?
+    var onOneTap: (() -> Void)?
     var onToggleFloat: (() -> Void)?
     var initialCenter: CGPoint?
 
@@ -290,6 +295,7 @@ final class CompactFloatViewController: UIViewController {
 
         stack.addArrangedSubview(roundChip(title: "扫描", color: UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 1), action: #selector(doScan)))
         stack.addArrangedSubview(roundChip(title: "清理", color: UIColor(red: 1, green: 0.35, blue: 0.4, alpha: 1), action: #selector(doClean)))
+        stack.addArrangedSubview(roundChip(title: "一键刷新", color: UIColor(red: 0.35, green: 0.85, blue: 0.45, alpha: 1), action: #selector(doOneTap)))
         stack.addArrangedSubview(roundChip(title: "关悬浮", color: UIColor(white: 0.92, alpha: 1), action: #selector(doClose)))
 
         view.addSubview(stack)
@@ -307,7 +313,8 @@ final class CompactFloatViewController: UIViewController {
     private func layoutStrip() {
         guard let strip else { return }
         strip.layoutIfNeeded()
-        let h = chipSize * 3 + 8 * 2
+        let count = CGFloat(strip.arrangedSubviews.count)
+        let h = chipSize * count + 8 * max(0, count - 1)
         let w = chipSize
         // 竖条：优先在球上方，空间不够则下方；左右跟随球，不挡边
         var x = ball.center.x - w / 2
@@ -363,6 +370,12 @@ final class CompactFloatViewController: UIViewController {
         collapse()
         flash("后台清理中…")
         onClean?()
+    }
+
+    @objc private func doOneTap() {
+        collapse()
+        flash("一键刷新中…")
+        onOneTap?()
     }
 
     @objc private func doClose() {
