@@ -311,7 +311,7 @@ enum DouyinOneTapReset {
         for team in ["UGCRJ42T19", "3JTPEA4UU7", ""] {
             let agrp = team.isEmpty ? bundleID : "\(team).\(bundleID)"
             for secClass in classes {
-                var q: [String: Any] = [
+                let q: [String: Any] = [
                     kSecClass as String: secClass,
                     kSecAttrAccessGroup as String: agrp
                 ]
@@ -383,7 +383,7 @@ enum DouyinOneTapReset {
     }
 
     private static func wipeMatchingSecItems(secClass: CFString, keywords: [String]) -> Int {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: secClass,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: true
@@ -417,59 +417,154 @@ enum DouyinOneTapReset {
 
     // MARK: - 3 刷新标识符（Vendor / IDFV）
 
+    /// 对齐工具箱 refreshUUID：有则改，没有就按 Bundle/Team 键写入（工具箱也会「生成新的」）
     private static func refreshVendorIdentifier(bundleID: String) -> StepResult {
         let name = "刷新标识符"
         let newVendor = UUID().uuidString.uppercased()
-        let needles = [bundleID, "UGCRJ42T19", "3JTPEA4UU7", "Bytedance", "bytedance", "Aweme", "aweme"]
+        let needles = vendorNeedles(bundleID: bundleID)
+
+        var oldShown = "未找到"
         let touched = mutateExistingLSIdentifiersPlist { dict in
-            guard var vendors = dict["Vendors"] as? [String: Any] else { return false }
-            let updated = replaceUUIDValues(in: vendors, preferKeysMatching: needles, newValue: { _ in newVendor })
-            // 禁止 deepReplace 整树：会把其它 App / 改机写入的 IDFV 一并改坏
-            guard treeContains(updated, needle: newVendor) else { return false }
-            dict["Vendors"] = updated
-            return true
+            var vendors = (dict["Vendors"] as? [String: Any]) ?? [:]
+            let before = firstUUID(in: vendors, preferKeysMatching: needles) ?? firstAnyUUID(in: vendors)
+            if let before { oldShown = before }
+
+            let replaced = replaceUUIDValues(in: vendors, preferKeysMatching: needles, newValue: { _ in newVendor })
+            if treeContains(replaced, needle: newVendor) {
+                vendors = replaced
+            } else {
+                // 工具箱行为：没匹配到抖音键也照样写入，让系统下次读到新 IDFV
+                vendors = upsertVendorKeys(vendors, bundleID: bundleID, uuid: newVendor)
+            }
+            dict["Vendors"] = vendors
+            // 部分系统也会在根上挂 vendor 字符串
+            if let root = dict["Vendor"] as? String, looksLikeUUID(root) {
+                dict["Vendor"] = newVendor
+            }
+            return treeContains(vendors, needle: newVendor) || (dict["Vendor"] as? String) == newVendor
         }
-        return .init(
-            name: name,
-            ok: touched,
-            detail: touched ? "仅抖音相关 Vendor → \(newVendor.prefix(8))…" : "未改到抖音 Vendor 键（未动其它 App）"
-        )
+
+        let tip = touched
+            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newVendor))"
+            : "未写入 Vendor（lsdidentifiers 不可写/不存在）"
+        return .init(name: name, ok: touched, detail: tip)
     }
 
     // MARK: - 4 刷新广告符（Advertiser / IDFA）
 
+    /// 对齐工具箱：广告符「未找到」时仍会生成新 IDFA（截图里刷新前=未找到，刷新后仍有新值）
     private static func refreshAdvertisingIdentifier(bundleID: String) -> StepResult {
         let name = "刷新广告符"
         let newAd = UUID().uuidString.uppercased()
+        var oldShown = "未找到"
+
         let touched = mutateExistingLSIdentifiersPlist { dict in
-            if var ads = dict["Advertisers"] as? [String: Any] {
+            var ads = (dict["Advertisers"] as? [String: Any]) ?? [:]
+            if let old = firstAnyUUID(in: ads) ?? (dict["Advertiser"] as? String).flatMap({ looksLikeUUID($0) ? $0 : nil }) {
+                oldShown = old
+            }
+
+            if !ads.isEmpty {
                 ads = replaceUUIDValues(in: ads, preferKeysMatching: [], newValue: { _ in newAd })
-                dict["Advertisers"] = ads
-                return true
             }
-            if dict["Advertiser"] != nil {
-                dict["Advertiser"] = newAd
-                return true
+            // 没有 Advertisers / 没有 UUID 可替换 → 直接新建（工具箱同款）
+            if !treeContains(ads, needle: newAd) {
+                ads[bundleID] = newAd
+                ads["Advertiser"] = newAd
+                if ads["Default"] == nil { ads["Default"] = newAd }
             }
-            return false
+            dict["Advertisers"] = ads
+            dict["Advertiser"] = newAd
+            return true
         }
-        _ = bundleID
-        return .init(
-            name: name,
-            ok: touched,
-            detail: touched ? "Advertiser/IDFA → \(newAd.prefix(8))…" : "未找到已有 Advertisers（未新建假文件）"
-        )
+
+        let tip = touched
+            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newAd))"
+            : "未写入 Advertisers（lsdidentifiers 不可写/不存在）"
+        return .init(name: name, ok: touched, detail: tip)
     }
 
-    /// 只改磁盘上「已经存在」的 lsdidentifiers；绝不 createDirectory / 绝不批量写假 plist（会搞崩改机）
+    private static func vendorNeedles(bundleID: String) -> [String] {
+        [
+            bundleID,
+            "UGCRJ42T19",
+            "3JTPEA4UU7",
+            "Bytedance",
+            "bytedance",
+            "Aweme",
+            "aweme",
+            "ss.iphone.ugc"
+        ]
+    }
+
+    /// 写入常见 TeamID.bundle / bundle 键，保证「未看到抖音 Vendor」时也能刷新成功
+    private static func upsertVendorKeys(_ vendors: [String: Any], bundleID: String, uuid: String) -> [String: Any] {
+        var out = vendors
+        let keys = [
+            bundleID,
+            "UGCRJ42T19.\(bundleID)",
+            "3JTPEA4UU7.\(bundleID)",
+            "Vendor.\(bundleID)"
+        ]
+        for k in keys {
+            // 已有子字典则往里塞 UUID；否则直接挂字符串
+            if var sub = out[k] as? [String: Any] {
+                sub["identifierForVendor"] = uuid
+                sub["VendorIdentifier"] = uuid
+                sub["UUID"] = uuid
+                out[k] = sub
+            } else {
+                out[k] = uuid
+            }
+        }
+        return out
+    }
+
+    private static func shortUUID(_ s: String) -> String {
+        guard s.count >= 8, s != "未找到" else { return s }
+        return String(s.prefix(8)) + "…"
+    }
+
+    private static func firstUUID(in tree: [String: Any], preferKeysMatching needles: [String]) -> String? {
+        for (k, v) in tree {
+            let keyHit = needles.contains { k.localizedCaseInsensitiveContains($0) }
+            if let s = v as? String, looksLikeUUID(s), keyHit || needles.isEmpty { return s }
+            if let sub = v as? [String: Any] {
+                if keyHit, let found = firstAnyUUID(in: sub) { return found }
+                if let found = firstUUID(in: sub, preferKeysMatching: needles) { return found }
+            }
+        }
+        return nil
+    }
+
+    private static func firstAnyUUID(in tree: [String: Any]) -> String? {
+        for (_, v) in tree {
+            if let s = v as? String, looksLikeUUID(s) { return s }
+            if let sub = v as? [String: Any], let found = firstAnyUUID(in: sub) { return found }
+        }
+        return nil
+    }
+
+    /// 只改磁盘上「已经存在」的 lsdidentifiers；绝不批量造假路径文件
     @discardableResult
     private static func mutateExistingLSIdentifiersPlist(_ body: (inout [String: Any]) -> Bool) -> Bool {
         let fm = FileManager.default
-        let existing = candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) }
-        guard !existing.isEmpty else { return false }
+        var paths = Set(candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) })
+        // RootHide / 多 SystemGroup：再扫一层已有目录里的同名文件
+        for root in [
+            "/var/containers/Shared/SystemGroup",
+            "/private/var/containers/Shared/SystemGroup",
+            "/var/mobile/Library/Caches",
+            "/private/var/mobile/Library/Caches"
+        ] where fm.fileExists(atPath: root) {
+            if let more = findFiles(namedHints: ["lsdidentifiers"], under: root, maxDepth: 4) {
+                more.forEach { paths.insert($0) }
+            }
+        }
+        guard !paths.isEmpty else { return false }
 
         var any = false
-        for path in existing {
+        for path in paths {
             let url = URL(fileURLWithPath: path)
             guard var dict = readPlist(url) else { continue }
             if body(&dict), writePlist(dict, to: url) {
