@@ -35,18 +35,18 @@ enum DouyinOneTapReset {
         // 0) 先杀抖音，避免文件占用
         _ = terminateAweme()
 
-        // 1) 刷新容器
+        // 1) 刷新容器（失败则回滚，避免 MCM 仍指旧路径导致改机/抖音找不到容器）
         let c = refreshContainer(cleaner: cleaner)
         steps.append(c.step)
         if let p = c.newPath { newPath = p }
 
-        // 2) 清钥匙串（用可能已变的新容器再定位）
+        // 2) 清钥匙串 —— 对齐 Fuck：只 SecItem，不动系统 keychain-2.db / 不删 Preferences
         steps.append(clearKeychain(bundleID: awemeBundleID))
 
-        // 3) 刷新标识符（IDFV / Vendor）
+        // 3) 刷新标识符（IDFV / Vendor）—— 只改抖音相关键，禁止整树乱刷
         steps.append(refreshVendorIdentifier(bundleID: awemeBundleID))
 
-        // 4) 刷新广告符（IDFA / Advertiser）
+        // 4) 刷新广告符（IDFA）—— 只改已存在的 lsdidentifiers，禁止新建假 plist
         steps.append(refreshAdvertisingIdentifier())
 
         let allOK = steps.allSatisfy(\.ok)
@@ -56,8 +56,8 @@ enum DouyinOneTapReset {
 
         \(lines.joined(separator: "\n"))
 
-        请完全退出抖音后重新打开。
-        若仍识别为旧设备，可再点一次（会自动再跑完整四步）。
+        说明：与工具箱「刷新」一致，主要换设备标识；账号数据通常还在（不是清数据）。
+        请划掉抖音后重开。若改机工具异常，勿反复点——本版已避免改系统钥匙串库/乱写标识文件。
         """
         return Result(
             ok: allOK,
@@ -74,7 +74,8 @@ enum DouyinOneTapReset {
         var newPath: String?
     }
 
-    /// 等价 Fuck：`renameBundleContainerForBundleId` + `updateMetadataPlist` + `updateMCMDatabase…`
+    /// 对齐 Fuck：`renameBundleContainer` + `updateMetadataPlist` + `updateMCMDatabase`
+    /// MCM 更新失败则目录改回，避免系统/改机仍指向已不存在的旧 UUID。
     private static func refreshContainer(cleaner: SlimCleaner) -> ContainerRefresh {
         let name = "刷新容器"
         guard let oldURL = cleaner.locateAwemeContainer() else {
@@ -101,12 +102,18 @@ enum DouyinOneTapReset {
                 newPath: newURL.path
             )
 
-            var detail = "\(oldUUID.prefix(8))… → \(newUUID.prefix(8))…"
-            if !metaOK { detail += " · metadata 未完全更新" }
-            if !mcmOK { detail += " · MCM库未命中(已改目录)" }
+            if !mcmOK {
+                // 回滚：否则 containermanager / 改机仍认旧路径 → 抖音/改机全乱
+                try? fm.moveItem(at: newURL, to: oldURL)
+                _ = updateMetadataPlist(at: oldURL, newUUID: oldUUID, bundleID: awemeBundleID)
+                return .init(
+                    step: .init(name: name, ok: false, detail: "MCM 库未更新，已回滚目录（避免路径损坏）"),
+                    newPath: nil
+                )
+            }
 
-            // 尽量让系统重新认容器
-            _ = reregisterIfPossible(bundleID: awemeBundleID, containerPath: newURL.path)
+            var detail = "\(oldUUID.prefix(8))… → \(newUUID.prefix(8))…"
+            if !metaOK { detail += " · metadata 警告" }
 
             return .init(
                 step: .init(name: name, ok: true, detail: detail),
@@ -123,7 +130,6 @@ enum DouyinOneTapReset {
     private static func updateMetadataPlist(at container: URL, newUUID: String, bundleID: String) -> Bool {
         let meta = container.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
         guard var dict = readPlist(meta) else {
-            // 没有就写一份最小可用
             let fresh: [String: Any] = [
                 "MCMMetadataIdentifier": bundleID,
                 "MCMMetadataUUID": newUUID,
@@ -133,44 +139,22 @@ enum DouyinOneTapReset {
         }
         dict["MCMMetadataIdentifier"] = bundleID
         dict["MCMMetadataUUID"] = newUUID
-        if dict["MCMMetadataInfo"] == nil {
-            dict["MCMMetadataInfo"] = [:] as [String: Any]
-        }
         return writePlist(dict, to: meta)
     }
 
-    /// 尝试改 MobileContainerManager / 相关 sqlite（路径因系统而异，失败不阻断）
+    /// 只改已知 MCM 库路径，禁止扫整个 SystemGroup 乱改 sqlite
     private static func updateMCMDatabase(bundleID: String, oldUUID: String, newUUID: String, newPath: String) -> Bool {
         let candidates = [
+            "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
             "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
-            "/var/root/Library/MobileContainerManager/containers.sqlite",
-            "/var/db/MobileContainerManager/containers.sqlite",
-            "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite"
+            "/private/var/root/Library/MobileContainerManager/containers.sqlite",
+            "/var/root/Library/MobileContainerManager/containers.sqlite"
         ]
         let fm = FileManager.default
         var touched = false
         for path in candidates where fm.fileExists(atPath: path) {
             if patchSQLiteReplace(path: path, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath, bundleID: bundleID) {
                 touched = true
-            }
-        }
-
-        // 再扫 SystemGroup 下可能的 containermanager 库
-        let groupRoots = [
-            "/var/containers/Shared/SystemGroup",
-            "/private/var/containers/Shared/SystemGroup"
-        ]
-        for root in groupRoots {
-            guard let dirs = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for name in dirs where name.lowercased().contains("container") {
-                let base = (root as NSString).appendingPathComponent(name)
-                if let found = findFiles(namedHints: ["containers.sqlite", "containermanager", ".sqlite"], under: base, maxDepth: 4) {
-                    for db in found {
-                        if patchSQLiteReplace(path: db, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath, bundleID: bundleID) {
-                            touched = true
-                        }
-                    }
-                }
             }
         }
         return touched
@@ -181,48 +165,28 @@ enum DouyinOneTapReset {
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let db else { return false }
         defer { sqlite3_close(db) }
 
-        // 通用：把文本字段里的旧 UUID / 旧路径换掉（表结构因版本不同）
+        let escapedPath = newPath.replacingOccurrences(of: "'", with: "''")
         let sqls = [
-            "UPDATE Containers SET uuid='\(newUUID)', path='\(newPath.replacingOccurrences(of: "'", with: "''"))' WHERE uuid='\(oldUUID)';",
-            "UPDATE Containers SET UUID='\(newUUID)', Path='\(newPath.replacingOccurrences(of: "'", with: "''"))' WHERE UUID='\(oldUUID)';",
-            "UPDATE containers SET uuid='\(newUUID)' WHERE uuid='\(oldUUID)';",
-            "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE data_container_uuid='\(oldUUID)';"
+            "UPDATE Containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
+            "UPDATE Containers SET UUID='\(newUUID)', Path='\(escapedPath)' WHERE UUID='\(oldUUID)';",
+            "UPDATE containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
+            "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE data_container_uuid='\(oldUUID)';",
+            "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE identifier='\(bundleID)' AND data_container_uuid='\(oldUUID)';"
         ]
         var any = false
         for sql in sqls {
-            if sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK {
-                if sqlite3_changes(db) > 0 { any = true }
+            if sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 {
+                any = true
             }
         }
-        _ = bundleID
         return any
-    }
-
-    private static func reregisterIfPossible(bundleID: String, containerPath: String) -> Bool {
-        // LSApplicationWorkspace 私有：registerApplicationDictionary / 无则跳过
-        guard let wsClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else { return false }
-        let defSel = NSSelectorFromString("defaultWorkspace")
-        guard wsClass.responds(to: defSel),
-              let ws = wsClass.perform(defSel)?.takeUnretainedValue() as? NSObject
-        else { return false }
-
-        // 尝试 invalidate
-        let inv = NSSelectorFromString("_invalidate")
-        if ws.responds(to: inv) {
-            _ = ws.perform(inv)
-        }
-        _ = bundleID
-        _ = containerPath
-        return true
     }
 
     // MARK: - 2 清钥匙串
 
-    /// 等价 Fuck：`cleanKeychainForBundleId:`
+    /// 对齐 Fuck：`cleanKeychainForBundleId:` —— 只用 SecItem，不碰系统 keychain-2.db，不删 Preferences
     private static func clearKeychain(bundleID: String) -> StepResult {
         let name = "清钥匙串"
-        var deleted = 0
-
         let classes: [CFString] = [
             kSecClassGenericPassword,
             kSecClassInternetPassword,
@@ -231,32 +195,49 @@ enum DouyinOneTapReset {
             kSecClassIdentity
         ]
 
+        var deleted = 0
         for secClass in classes {
             deleted += deleteKeychainItems(secClass: secClass, bundleID: bundleID)
         }
 
-        // 再清容器内常见本地凭证缓存（不删 mmkv 整目录，只清偏好里设备指纹相关由后续步骤处理）
-        deleted += clearContainerCredentialFiles(bundleID: bundleID)
+        let detail = deleted > 0
+            ? "SecItem 已删约 \(deleted) 项（仅抖音相关）"
+            : "SecItem 已执行（当前无匹配项；账号数据不在此清）"
+        return .init(name: name, ok: true, detail: detail)
+    }
 
-        let ok = deleted >= 0
-        return .init(
-            name: name,
-            ok: ok,
-            detail: deleted > 0 ? "已清理约 \(deleted) 项" : "已执行清理（可能本无匹配项）"
-        )
+    private static func keychainKeywords(bundleID: String) -> [String] {
+        // 收紧：避免 idfa/idfv 等泛词误伤其它 App / 改机写入
+        [
+            bundleID,
+            "com.ss.iphone.ugc.Aweme",
+            "aweme",
+            "Aweme",
+            "bytedance",
+            "ByteDance",
+            "ss.iphone.ugc",
+            "UGCRJ42T19",
+            "3JTPEA4UU7"
+        ]
     }
 
     private static func deleteKeychainItems(secClass: CFString, bundleID: String) -> Int {
         var count = 0
+        let keywords = keychainKeywords(bundleID: bundleID)
 
-        // 按 AccessGroup / Service / Account 模糊匹配
-        let queries: [[String: Any]] = [
+        var queries: [[String: Any]] = [
             [kSecClass as String: secClass, kSecAttrService as String: bundleID],
             [kSecClass as String: secClass, kSecAttrAccount as String: bundleID],
             [kSecClass as String: secClass, kSecAttrAccessGroup as String: bundleID],
             [kSecClass as String: secClass, kSecAttrService as String: "Aweme"],
             [kSecClass as String: secClass, kSecAttrAccount as String: "Aweme"]
         ]
+        for team in ["UGCRJ42T19", "3JTPEA4UU7"] {
+            queries.append([
+                kSecClass as String: secClass,
+                kSecAttrAccessGroup as String: "\(team).\(bundleID)"
+            ])
+        }
 
         for var q in queries {
             q[kSecMatchLimit as String] = kSecMatchLimitAll
@@ -265,47 +246,23 @@ enum DouyinOneTapReset {
             let st = SecItemCopyMatching(q as CFDictionary, &result)
             if st == errSecSuccess, let arr = result as? [[String: Any]] {
                 for item in arr {
-                    var del: [String: Any] = [kSecClass as String: secClass]
-                    if let svc = item[kSecAttrService as String] { del[kSecAttrService as String] = svc }
-                    if let acc = item[kSecAttrAccount as String] { del[kSecAttrAccount as String] = acc }
-                    if let ag = item[kSecAttrAccessGroup as String] { del[kSecAttrAccessGroup as String] = ag }
-                    if SecItemDelete(del as CFDictionary) == errSecSuccess {
-                        count += 1
-                    }
+                    if deleteOneKeychainItem(secClass: secClass, item: item) { count += 1 }
                 }
             } else {
-                // 直接按查询删
                 var delQ = q
                 delQ.removeValue(forKey: kSecMatchLimit as String)
                 delQ.removeValue(forKey: kSecReturnAttributes as String)
-                if SecItemDelete(delQ as CFDictionary) == errSecSuccess {
-                    count += 1
-                }
+                if SecItemDelete(delQ as CFDictionary) == errSecSuccess { count += 1 }
             }
         }
 
-        // 枚举 GenericPassword 全量，筛 bundle / bytedance / aweme
-        if secClass == kSecClassGenericPassword {
-            count += wipeMatchingGenericPasswords(keywords: [
-                bundleID,
-                "aweme",
-                "Aweme",
-                "bytedance",
-                "ByteDance",
-                "ss.iphone.ugc",
-                "openudid",
-                "idfa",
-                "idfv",
-                "device_id",
-                "install_id"
-            ])
-        }
+        count += wipeMatchingSecItems(secClass: secClass, keywords: keywords)
         return count
     }
 
-    private static func wipeMatchingGenericPasswords(keywords: [String]) -> Int {
+    private static func wipeMatchingSecItems(secClass: CFString, keywords: [String]) -> Int {
         var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
+            kSecClass as String: secClass,
             kSecMatchLimit as String: kSecMatchLimitAll,
             kSecReturnAttributes as String: true
         ]
@@ -323,32 +280,17 @@ enum DouyinOneTapReset {
             ].compactMap { $0 }.joined(separator: " ").lowercased()
 
             guard keywords.contains(where: { hay.contains($0.lowercased()) }) else { continue }
-
-            var del: [String: Any] = [kSecClass as String: kSecClassGenericPassword]
-            if let svc = item[kSecAttrService as String] { del[kSecAttrService as String] = svc }
-            if let acc = item[kSecAttrAccount as String] { del[kSecAttrAccount as String] = acc }
-            if let ag = item[kSecAttrAccessGroup as String] { del[kSecAttrAccessGroup as String] = ag }
-            if SecItemDelete(del as CFDictionary) == errSecSuccess { n += 1 }
+            if deleteOneKeychainItem(secClass: secClass, item: item) { n += 1 }
         }
         return n
     }
 
-    private static func clearContainerCredentialFiles(bundleID: String) -> Int {
-        _ = bundleID
-        let cleaner = SlimCleaner()
-        guard let container = cleaner.locateAwemeContainer() else { return 0 }
-        let fm = FileManager.default
-        var n = 0
-        // 常见设备指纹缓存文件名（存在才删）
-        let relatives = [
-            "Library/Preferences/com.ss.iphone.ugc.Aweme.plist",
-            // 不整删 Preferences，避免伤登录票据；只在后续标识符步骤改系统侧
-        ]
-        // 这里刻意少删文件：钥匙串为主；应用内 id 交给系统 Vendor/Advertiser 刷新
-        _ = relatives
-        _ = fm
-        _ = container
-        return n
+    private static func deleteOneKeychainItem(secClass: CFString, item: [String: Any]) -> Bool {
+        var del: [String: Any] = [kSecClass as String: secClass]
+        if let svc = item[kSecAttrService as String] { del[kSecAttrService as String] = svc }
+        if let acc = item[kSecAttrAccount as String] { del[kSecAttrAccount as String] = acc }
+        if let ag = item[kSecAttrAccessGroup as String] { del[kSecAttrAccessGroup as String] = ag }
+        return SecItemDelete(del as CFDictionary) == errSecSuccess
     }
 
     // MARK: - 3 刷新标识符（Vendor / IDFV）
@@ -356,31 +298,19 @@ enum DouyinOneTapReset {
     private static func refreshVendorIdentifier(bundleID: String) -> StepResult {
         let name = "刷新标识符"
         let newVendor = UUID().uuidString.uppercased()
-        let touched = mutateLSIdentifiersPlist { dict in
-            // Vendors: teamID → { bundle → uuid } 或扁平结构，兼容多种
-            if var vendors = dict["Vendors"] as? [String: Any] {
-                let preferred = replaceUUIDValues(
-                    in: vendors,
-                    preferKeysMatching: [bundleID, "UGCRJ42T19", "Bytedance", "bytedance"],
-                    newValue: { _ in newVendor }
-                )
-                vendors = treeContains(preferred, needle: newVendor)
-                    ? preferred
-                    : deepReplaceAllUUIDLikeStrings(vendors, with: newVendor)
-                dict["Vendors"] = vendors
-                return true
-            }
-            if dict["Vendor"] != nil {
-                dict["Vendor"] = newVendor
-                return true
-            }
-            dict["Vendors"] = [bundleID: newVendor]
+        let needles = [bundleID, "UGCRJ42T19", "3JTPEA4UU7", "Bytedance", "bytedance", "Aweme", "aweme"]
+        let touched = mutateExistingLSIdentifiersPlist { dict in
+            guard var vendors = dict["Vendors"] as? [String: Any] else { return false }
+            let updated = replaceUUIDValues(in: vendors, preferKeysMatching: needles, newValue: { _ in newVendor })
+            // 禁止 deepReplace 整树：会把其它 App / 改机写入的 IDFV 一并改坏
+            guard treeContains(updated, needle: newVendor) else { return false }
+            dict["Vendors"] = updated
             return true
         }
         return .init(
             name: name,
             ok: touched,
-            detail: touched ? "Vendor/IDFV → \(newVendor.prefix(8))…" : "未找到 lsdidentifiers，已尝试写入候选路径"
+            detail: touched ? "仅抖音相关 Vendor → \(newVendor.prefix(8))…" : "未改到抖音 Vendor 键（未动其它 App）"
         )
     }
 
@@ -389,9 +319,11 @@ enum DouyinOneTapReset {
     private static func refreshAdvertisingIdentifier() -> StepResult {
         let name = "刷新广告符"
         let newAd = UUID().uuidString.uppercased()
-        let touched = mutateLSIdentifiersPlist { dict in
+        // IDFA 多为设备级一条；只改 Advertisers 下已有 UUID 值，且只写「已存在」的 plist
+        let touched = mutateExistingLSIdentifiersPlist { dict in
             if var ads = dict["Advertisers"] as? [String: Any] {
-                ads = deepReplaceAllUUIDLikeStrings(ads, with: newAd)
+                ads = replaceUUIDValues(in: ads, preferKeysMatching: [], newValue: { _ in newAd })
+                // preferKeys 空：replaceUUIDValues 里 needles.isEmpty 时会替换所有 UUID —— 对 Advertisers 合理（设备级 IDFA）
                 dict["Advertisers"] = ads
                 return true
             }
@@ -399,31 +331,26 @@ enum DouyinOneTapReset {
                 dict["Advertiser"] = newAd
                 return true
             }
-            // Fuck AdvertisingIdentifierManager: advertiserKey
-            dict["Advertisers"] = ["Default": newAd]
-            return true
+            return false
         }
         return .init(
             name: name,
             ok: touched,
-            detail: touched ? "Advertiser/IDFA → \(newAd.prefix(8))…" : "未写入广告标识（路径可能变化）"
+            detail: touched ? "Advertiser/IDFA → \(newAd.prefix(8))…" : "未找到已有 Advertisers（未新建假文件）"
         )
     }
 
-    /// 等价 Fuck `AdvertisingIdentifierManager`：在多候选路径找/改标识 plist
+    /// 只改磁盘上「已经存在」的 lsdidentifiers；绝不 createDirectory / 绝不批量写假 plist（会搞崩改机）
     @discardableResult
-    private static func mutateLSIdentifiersPlist(_ body: (inout [String: Any]) -> Bool) -> Bool {
+    private static func mutateExistingLSIdentifiersPlist(_ body: (inout [String: Any]) -> Bool) -> Bool {
         let fm = FileManager.default
-        var paths = candidateIdentifierPlistPaths()
-        // 已存在的优先
-        paths.sort { fm.fileExists(atPath: $0) && !fm.fileExists(atPath: $1) }
+        let existing = candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) }
+        guard !existing.isEmpty else { return false }
 
         var any = false
-        for path in paths {
+        for path in existing {
             let url = URL(fileURLWithPath: path)
-            var dict = readPlist(url) ?? [:]
-            let dir = url.deletingLastPathComponent()
-            try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            guard var dict = readPlist(url) else { continue }
             if body(&dict), writePlist(dict, to: url) {
                 any = true
             }
@@ -432,29 +359,14 @@ enum DouyinOneTapReset {
     }
 
     private static func candidateIdentifierPlistPaths() -> [String] {
-        var list: [String] = [
+        [
             "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile.shared_container/Library/Caches/com.apple.lsdidentifiers.plist",
-            "/var/containers/Shared/SystemGroup/systemgroup.com.apple.lsd.shared/Library/Caches/com.apple.lsdidentifiers.plist",
+            "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile.shared_container/Library/Caches/com.apple.lsdidentifiers.plist",
             "/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
-            "/var/mobile/Library/Preferences/com.apple.lsdidentifiers.plist",
             "/private/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
+            "/var/mobile/Library/Preferences/com.apple.lsdidentifiers.plist",
             "/private/var/mobile/Library/Preferences/com.apple.lsdidentifiers.plist"
         ]
-
-        let roots = [
-            "/var/containers/Shared/SystemGroup",
-            "/private/var/containers/Shared/SystemGroup"
-        ]
-        let fm = FileManager.default
-        for root in roots {
-            guard let groups = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for g in groups {
-                let base = (root as NSString).appendingPathComponent(g)
-                list.append((base as NSString).appendingPathComponent("Library/Caches/com.apple.lsdidentifiers.plist"))
-                list.append((base as NSString).appendingPathComponent("Library/Preferences/com.apple.lsdidentifiers.plist"))
-            }
-        }
-        return Array(Set(list))
     }
 
     // MARK: - 进程
@@ -528,20 +440,6 @@ enum DouyinOneTapReset {
         return out
     }
 
-    private static func deepReplaceAllUUIDLikeStrings(_ tree: [String: Any], with newUUID: String) -> [String: Any] {
-        var out: [String: Any] = [:]
-        for (k, v) in tree {
-            if let sub = v as? [String: Any] {
-                out[k] = deepReplaceAllUUIDLikeStrings(sub, with: newUUID)
-            } else if let s = v as? String, looksLikeUUID(s) {
-                out[k] = newUUID
-            } else {
-                out[k] = v
-            }
-        }
-        return out
-    }
-
     private static func treeContains(_ tree: [String: Any], needle: String) -> Bool {
         for (_, v) in tree {
             if let s = v as? String, s == needle { return true }
@@ -551,29 +449,6 @@ enum DouyinOneTapReset {
     }
 
     private static func looksLikeUUID(_ s: String) -> Bool {
-        let u = UUID(uuidString: s)
-        return u != nil
-    }
-
-    private static func findFiles(namedHints hints: [String], under root: String, maxDepth: Int) -> [String]? {
-        var found: [String] = []
-        func walk(_ path: String, depth: Int) {
-            guard depth <= maxDepth else { return }
-            guard let items = try? FileManager.default.contentsOfDirectory(atPath: path) else { return }
-            for name in items {
-                let full = (path as NSString).appendingPathComponent(name)
-                var isDir: ObjCBool = false
-                FileManager.default.fileExists(atPath: full, isDirectory: &isDir)
-                let lower = name.lowercased()
-                if hints.contains(where: { lower.contains($0.lowercased()) }), !isDir.boolValue {
-                    found.append(full)
-                }
-                if isDir.boolValue {
-                    walk(full, depth: depth + 1)
-                }
-            }
-        }
-        walk(root, depth: 0)
-        return found.isEmpty ? nil : found
+        UUID(uuidString: s) != nil
     }
 }
