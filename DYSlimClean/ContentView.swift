@@ -107,9 +107,14 @@ struct ContentView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 4) {
-                Text("DY助手")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(.white)
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("DY助手")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(.white)
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "8.0")")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(accent)
+                }
                 Text("精简 · 票据迁移 · 巨魔 / 多巴胺")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.55))
