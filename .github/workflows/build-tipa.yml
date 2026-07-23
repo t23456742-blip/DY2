@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     runs-on: macos-15
+    defaults:
+      run:
+        working-directory: DYSlimClean
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,26 +21,28 @@ jobs:
         with:
           xcode-version: "16"
 
+      - name: Show layout
+        run: |
+          pwd
+          ls -la
+          test -f project.yml
+          test -f scripts/package-tipa.sh
+          test -f Resources/Info.plist
 
       - name: Show Xcode
+        working-directory: .
         run: xcodebuild -version
 
       - name: Install tools
+        working-directory: .
         run: |
           brew install ldid xcodegen
           xcodegen --version
 
       - name: Generate Xcode project
-        working-directory: DYSlimClean
-        run: |
-          pwd
-          ls -la
-          test -f project.yml
-          xcodegen generate
-          head -n 5 DYSlimClean.xcodeproj/project.pbxproj
+        run: xcodegen generate
 
       - name: Build (unsigned)
-        working-directory: DYSlimClean
         run: |
           xcodebuild \
             -project DYSlimClean.xcodeproj \
@@ -51,8 +56,8 @@ jobs:
             build
 
       - name: Package tipa
-        working-directory: DYSlimClean
         run: |
+          sed -i '' $'s/\r$//' scripts/package-tipa.sh
           chmod +x scripts/package-tipa.sh
           bash scripts/package-tipa.sh
 
@@ -64,13 +69,3 @@ jobs:
             DYSlimClean/dist/*.tipa
             DYSlimClean/dist/*.ipa
           if-no-files-found: error
-
-      - name: Release on tag
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            DYSlimClean/dist/*.tipa
-            DYSlimClean/dist/*.ipa
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
