@@ -76,11 +76,14 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    func scan() {
+    func scan(fromFloat: Bool = false) {
         guard !isBusy else { return }
         isBusy = true
         busyText = "扫描中…"
         log("开始扫描…")
+        if fromFloat {
+            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "后台扫描中…")
+        }
 
         Task.detached(priority: .userInitiated) { [cleaner] in
             let result = cleaner.scan()
@@ -90,9 +93,18 @@ final class CleanViewModel: ObservableObject {
                 if let err = result.error {
                     self.log("扫描失败：\(err)")
                     self.offerCleanAfterScan = false
+                    if fromFloat {
+                        NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "扫描失败")
+                    }
                 } else {
                     self.log("扫描完成：共 \(result.total) 个 · 可保留 \(result.keepHits) 个 · 多余 \(result.extras.count) 个")
                     self.log("优化前占用：\(Self.formatBytes(result.totalBytes)) · 可释放：\(Self.formatBytes(result.extraBytes))")
+                    if fromFloat {
+                        NotificationCenter.default.post(
+                            name: Notification.Name("dy.slim.float.status"),
+                            object: result.extras.isEmpty ? "扫描完成·无多余" : "扫描完成"
+                        )
+                    }
                     if self.offerCleanAfterScan {
                         self.offerCleanAfterScan = false
                         if result.extras.isEmpty {
