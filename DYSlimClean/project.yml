@@ -17,8 +17,8 @@ settings:
     MARKETING_VERSION: "13.0"
     CURRENT_PROJECT_VERSION: "130"
     GENERATE_INFOPLIST_FILE: "NO"
-    INFOPLIST_FILE: DYSlimClean/Resources/Info.plist
-    CODE_SIGN_ENTITLEMENTS: DYSlimClean/Resources/DYSlimClean.entitlements
+    INFOPLIST_FILE: Resources/Info.plist
+    CODE_SIGN_ENTITLEMENTS: Resources/DYSlimClean.entitlements
     SUPPORTS_MACCATALYST: "NO"
     ENABLE_BITCODE: "NO"
     OTHER_LDFLAGS: "$(inherited) -lsqlite3 -lz"
@@ -27,10 +27,16 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: DYSlimClean
+      - path: .
         excludes:
           - Resources/**
-      - path: DYSlimClean/Resources
+          - scripts/**
+          - dist/**
+          - build/**
+          - "*.yml"
+          - "*.md"
+          - ".github/**"
+      - path: Resources
         buildPhase: resources
         excludes:
           - Info.plist
@@ -41,12 +47,12 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.dyslim.cleaner
         MARKETING_VERSION: "13.0"
         CURRENT_PROJECT_VERSION: "130"
-        INFOPLIST_FILE: DYSlimClean/Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: DYSlimClean/Resources/DYSlimClean.entitlements
+        INFOPLIST_FILE: Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/DYSlimClean.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
     info:
-      path: DYSlimClean/Resources/Info.plist
+      path: Resources/Info.plist
       properties:
         CFBundleDisplayName: DY助手
         CFBundleName: DY助手
