@@ -126,7 +126,7 @@ struct ContentView: View {
                     Text("DY助手")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "14.0")")
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "14.1")")
                         .font(.caption.weight(.bold))
                         .foregroundColor(accent)
                 }
@@ -520,8 +520,8 @@ struct ContentView: View {
                     } else {
                         Image(systemName: "globe")
                     }
-                    Text("导出CK→PC网页")
-                        .fontWeight(.bold)
+                        Text("导出全量CK(Safari+抖音)")
+                            .fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 14)
@@ -537,7 +537,7 @@ struct ContentView: View {
             }
             .disabled(model.isBusy || !model.containerFound)
 
-            Text("导出 ZIP 到 Media/dyck/*_dyck.zip → PC「DY网页注入器」一键导入；也可 Cookie-Editor 用 JSON。")
+            Text("先用手机 Safari 登录 creator.douyin.com，再导出。ZIP→Media/dyck/*_dyck.zip，PC注入器全量导入。")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.4))
 

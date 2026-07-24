@@ -31,8 +31,8 @@ fi
 
 echo "Using app: $APP_PATH"
 
-MARKETING_VERSION="${MARKETING_VERSION:-14.0}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-140}"
+MARKETING_VERSION="${MARKETING_VERSION:-14.1}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-141}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \

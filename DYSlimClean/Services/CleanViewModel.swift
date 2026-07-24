@@ -459,7 +459,7 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "导出 CK…"
-        log("开始导出抖音 Cookies（PC 网页）…")
+        log("开始全量导出 Cookies（Safari系统浏览器 + 抖音沙盒，不过滤）…")
         Task.detached(priority: .userInitiated) { [cleaner] in
             let r = DouyinCookieExport.export(cleaner: cleaner)
             await MainActor.run {

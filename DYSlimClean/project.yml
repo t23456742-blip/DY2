@@ -14,8 +14,8 @@ settings:
     CODE_SIGN_IDENTITY: ""
     DEVELOPMENT_TEAM: ""
     PRODUCT_BUNDLE_IDENTIFIER: com.dyslim.cleaner
-    MARKETING_VERSION: "14.0"
-    CURRENT_PROJECT_VERSION: "140"
+    MARKETING_VERSION: "14.1"
+    CURRENT_PROJECT_VERSION: "141"
     GENERATE_INFOPLIST_FILE: "NO"
     INFOPLIST_FILE: Resources/Info.plist
     CODE_SIGN_ENTITLEMENTS: Resources/DYSlimClean.entitlements
@@ -51,8 +51,8 @@ targets:
       base:
         PRODUCT_NAME: DYSlimClean
         PRODUCT_BUNDLE_IDENTIFIER: com.dyslim.cleaner
-        MARKETING_VERSION: "14.0"
-        CURRENT_PROJECT_VERSION: "140"
+        MARKETING_VERSION: "14.1"
+        CURRENT_PROJECT_VERSION: "141"
         INFOPLIST_FILE: Resources/Info.plist
         CODE_SIGN_ENTITLEMENTS: Resources/DYSlimClean.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -62,8 +62,8 @@ targets:
       properties:
         CFBundleDisplayName: DY助手
         CFBundleName: DY助手
-        CFBundleShortVersionString: "14.0"
-        CFBundleVersion: "140"
+        CFBundleShortVersionString: "14.1"
+        CFBundleVersion: "141"
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleLocalizations:
           - zh-Hans
