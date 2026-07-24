@@ -23,7 +23,6 @@ struct RootTabView: View {
         .environment(\.locale, Locale(identifier: "zh_CN"))
         .onAppear {
             cleanModel.bootstrap()
-            FloatingBallController.shared.bind(cleanModel: cleanModel)
         }
     }
 }

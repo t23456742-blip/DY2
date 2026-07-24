@@ -35,9 +35,13 @@ targets:
           - build/**
           - "*.yml"
           - "*.md"
+          - "*.txt"
           - ".github/**"
           - "PC配套*/**"
           - "PC配套*/**/*"
+          - "workflows-*"
+          - "上传说明*"
+          - "workflows-build-tipa.yml"
       - path: Resources
         buildPhase: resources
         excludes:

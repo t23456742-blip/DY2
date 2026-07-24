@@ -27,7 +27,6 @@ final class CleanViewModel: ObservableObject {
     @Published var migrateResultText = ""
     @Published var showInstallMigrateResult = false
     @Published var installMigrateText = ""
-    @Published var floatEnabled = false
     @Published var offerCleanAfterScan = false
     @Published var logLines: [String] = []
 
@@ -88,14 +87,11 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    func scan(fromFloat: Bool = false) {
+    func scan() {
         guard !isBusy else { return }
         isBusy = true
         busyText = "扫描中…"
         log("开始扫描…")
-        if fromFloat {
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "后台扫描中…")
-        }
 
         Task.detached(priority: .userInitiated) { [cleaner] in
             let result = cleaner.scan()
@@ -105,18 +101,9 @@ final class CleanViewModel: ObservableObject {
                 if let err = result.error {
                     self.log("扫描失败：\(err)")
                     self.offerCleanAfterScan = false
-                    if fromFloat {
-                        NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "扫描失败")
-                    }
                 } else {
                     self.log("扫描完成：共 \(result.total) 个 · 可保留 \(result.keepHits) 个 · 多余 \(result.extras.count) 个")
                     self.log("优化前占用：\(Self.formatBytes(result.totalBytes)) · 可释放：\(Self.formatBytes(result.extraBytes))")
-                    if fromFloat {
-                        NotificationCenter.default.post(
-                            name: Notification.Name("dy.slim.float.status"),
-                            object: result.extras.isEmpty ? "扫描完成·无多余" : "扫描完成"
-                        )
-                    }
                     if self.offerCleanAfterScan {
                         self.offerCleanAfterScan = false
                         if result.extras.isEmpty {
@@ -126,73 +113,6 @@ final class CleanViewModel: ObservableObject {
                         }
                     }
                 }
-            }
-        }
-    }
-
-    /// 悬浮球触发：后台清理，不弹确认、不抢前台
-    func requestSlimFromFloat() {
-        guard !isBusy else {
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "正在处理中")
-            return
-        }
-        NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "后台清理中…")
-        if extraCount > 0 {
-            deleteExtrasSilentFromFloat()
-        } else {
-            // 先扫再删，全程后台
-            offerCleanAfterScan = false
-            isBusy = true
-            busyText = "扫描中…"
-            log("悬浮：后台扫描后清理…")
-            Task.detached(priority: .userInitiated) { [cleaner] in
-                let result = cleaner.scan()
-                await MainActor.run {
-                    self.applyScan(result, isPostClean: false)
-                    if let err = result.error {
-                        self.isBusy = false
-                        self.log("悬浮扫描失败：\(err)")
-                        NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "扫描失败")
-                        return
-                    }
-                    if result.extras.isEmpty {
-                        self.isBusy = false
-                        self.log("悬浮：没有可删文件")
-                        NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "无需清理")
-                    } else {
-                        self.deleteExtrasSilentFromFloat()
-                    }
-                }
-            }
-        }
-    }
-
-    private func deleteExtrasSilentFromFloat() {
-        guard !extras.isEmpty else {
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "无需清理")
-            return
-        }
-        isBusy = true
-        busyText = "删除中…"
-        let snapshotBefore = beforeBytes
-        let targets = extras
-        log("悬浮：后台删除 \(targets.count) 个多余文件…")
-        Task.detached(priority: .userInitiated) { [cleaner] in
-            let summary = cleaner.delete(urls: targets)
-            let afterScan = cleaner.scan()
-            await MainActor.run {
-                self.applyScan(afterScan, isPostClean: true)
-                self.hasCleaned = true
-                if snapshotBefore > 0 {
-                    self.beforeBytes = snapshotBefore
-                    self.beforeSizeText = Self.formatBytes(snapshotBefore)
-                }
-                self.isBusy = false
-                self.log("悬浮清理完成：删 \(summary.deleted) · 失败 \(summary.failed)")
-                NotificationCenter.default.post(
-                    name: Notification.Name("dy.slim.float.status"),
-                    object: summary.failed == 0 ? "清理完成" : "清理部分失败"
-                )
             }
         }
     }
@@ -247,23 +167,14 @@ final class CleanViewModel: ObservableObject {
     func runIdentityAction(
         _ action: DouyinOneTapReset.Action?,
         app: TargetApp,
-        allFour: Bool,
-        fromFloat: Bool = false
+        allFour: Bool
     ) {
-        guard !isBusy else {
-            if fromFloat {
-                NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "正在处理中")
-            }
-            return
-        }
+        guard !isBusy else { return }
         isBusy = true
         oneTapSucceeded = false
         let title = allFour ? "一键四项" : (action?.rawValue ?? "操作")
         busyText = "\(app.title)·\(title)…"
         log("开始 \(app.title) · \(title)")
-        if fromFloat {
-            NotificationCenter.default.post(name: Notification.Name("dy.slim.float.status"), object: "\(title)中…")
-        }
 
         let bundleIDs = app.bundleIDs
         let displayName = app.title
@@ -283,17 +194,8 @@ final class CleanViewModel: ObservableObject {
                     return "\(idx + 1). \(mark) \(s.name) · \(s.detail)"
                 }
                 self.oneTapSucceeded = result.ok
-                if fromFloat {
-                    self.oneTapResultText = result.ok ? "成功" : "失败"
-                    self.showOneTapResult = false
-                    NotificationCenter.default.post(
-                        name: Notification.Name("dy.slim.float.status"),
-                        object: result.ok ? "成功" : "失败"
-                    )
-                } else {
-                    self.oneTapResultText = result.message
-                    self.showOneTapResult = true
-                }
+                self.oneTapResultText = result.message
+                self.showOneTapResult = true
                 if let path = result.newContainerPath,
                    app.bundleIDs.contains(where: { $0.caseInsensitiveCompare(SlimCleaner.awemeBundleID) == .orderedSame }) {
                     self.containerFound = true
@@ -307,9 +209,9 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 抖音一键四项（悬浮球 / 兼容旧入口）
-    func runOneTapReset(fromFloat: Bool = false) {
-        runIdentityAction(nil, app: AppContainerLocator.douyin, allFour: true, fromFloat: fromFloat)
+    /// 抖音一键四项
+    func runOneTapReset() {
+        runIdentityAction(nil, app: AppContainerLocator.douyin, allFour: true)
     }
 
     /// 直接清理（不备份）

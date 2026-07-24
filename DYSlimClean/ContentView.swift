@@ -102,14 +102,6 @@ struct ContentView: View {
         } message: {
             Text(model.cookieExportResultText)
         }
-        .onAppear {
-            model.floatEnabled = FloatingBallController.shared.isVisible
-        }
-        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.visibilityChanged)) { note in
-            if let on = note.object as? Bool {
-                model.floatEnabled = on
-            }
-        }
     }
 
     private var header: some View {
@@ -548,31 +540,6 @@ struct ContentView: View {
             Text("导出 ZIP 到 Media/dyck/*_dyck.zip → PC「DY网页注入器」一键导入；也可 Cookie-Editor 用 JSON。")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.4))
-
-            Button {
-                FloatingBallController.shared.toggle()
-                model.floatEnabled = FloatingBallController.shared.isVisible
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: model.floatEnabled ? "dot.circle.and.hand.point.up.left.fill" : "circle.dashed")
-                    Text(model.floatEnabled ? "关闭悬浮球" : "打开悬浮球")
-                        .fontWeight(.bold)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(
-                    LinearGradient(
-                        colors: model.floatEnabled
-                            ? [Color.orange, Color(red: 1.0, green: 0.55, blue: 0.2)]
-                            : [Color(red: 0.35, green: 0.45, blue: 0.95), Color(red: 0.2, green: 0.7, blue: 0.9)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .foregroundColor(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-            .disabled(model.isBusy)
 
             Button {
                 model.runMigratePasteFix()
