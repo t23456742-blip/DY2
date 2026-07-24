@@ -113,6 +113,26 @@ enum DouyinOneTapReset {
         return Result(ok: step.ok, steps: [step], message: tip.trimmingCharacters(in: .whitespacesAndNewlines), newContainerPath: newPath)
     }
 
+    /// 半刷新修复：系统空壳 ← 孤儿有数据目录（只改 MCM 指向，不搬文件）
+    @discardableResult
+    static func relinkContainerIfPossible(bundleID: String, fromEmpty emptyURL: URL, toFat fatURL: URL) -> Bool {
+        let oldUUID = emptyURL.lastPathComponent
+        let newUUID = fatURL.lastPathComponent
+        // 空壳 UUID 可能已是系统当前登记；要把库里的 uuid/path 改成 fat 的
+        // 这里 old=空壳登记值，new=fat 目录名
+        let ok = updateMCMDatabase(
+            bundleID: bundleID,
+            oldUUID: oldUUID,
+            newUUID: newUUID,
+            newPath: fatURL.path
+        )
+        if ok {
+            _ = updateMetadataPlist(at: fatURL, newUUID: newUUID, bundleID: bundleID)
+            _ = reregisterContainer(bundleID: bundleID, containerPath: fatURL.path)
+        }
+        return ok
+    }
+
     // MARK: - 1 刷新容器
 
     private struct ContainerRefresh {
@@ -120,7 +140,9 @@ enum DouyinOneTapReset {
         var newPath: String?
     }
 
-    /// 工具箱 refreshId：只动「当前 Bundle」的 Data 容器
+    /// 工具箱 refreshId：目录改名 + metadata + MCM 必须都成功，否则回滚。
+    /// 以前 MCM 失败仍报成功 → 系统按旧 UUID 找不到目录，会给抖音建「空容器」，
+    /// 扫描/爱思就看到没数据（真数据还在孤儿目录里）。
     private static func refreshContainer(bundleID: String, containerURL oldURL: URL) -> ContainerRefresh {
         let name = "刷新容器"
         let fm = FileManager.default
@@ -141,18 +163,33 @@ enum DouyinOneTapReset {
                 return .init(step: .init(name: name, ok: false, detail: "metadata 写入失败，已回滚"), newPath: nil)
             }
 
+            // MCM sqlite 必须成功；失败立刻回滚（禁止半刷新空壳）
             let mcmOK = updateMCMDatabase(
                 bundleID: bundleID,
                 oldUUID: oldUUID,
                 newUUID: newUUID,
                 newPath: newURL.path
             )
-            let regOK = reregisterContainer(bundleID: bundleID, containerPath: newURL.path)
+            if !mcmOK {
+                try? fm.moveItem(at: newURL, to: oldURL)
+                _ = updateMetadataPlist(at: oldURL, newUUID: oldUUID, bundleID: bundleID)
+                return .init(
+                    step: .init(
+                        name: name,
+                        ok: false,
+                        detail: "MCM 未更新（已回滚，数据未丢）。系统库未挂上新 UUID，硬刷新会变成空容器"
+                    ),
+                    newPath: nil
+                )
+            }
 
-            var detail = "\(bundleID) · \(oldUUID.prefix(8))… → \(newUUID.prefix(8))…"
-            if mcmOK { detail += " · MCM已更新" }
-            else { detail += " · MCM未命中(目录+metadata已换)" }
-            if regOK { detail += " · 已重注册" }
+            _ = reregisterContainer(bundleID: bundleID, containerPath: newURL.path)
+            _ = pokeContainerManager(bundleID: bundleID)
+
+            let linked = verifyContainerLink(bundleID: bundleID, expectPath: newURL.path)
+            var detail = "\(oldUUID.prefix(8))… → \(newUUID.prefix(8))… · MCM已更新"
+            if linked { detail += " · 系统已指向新容器" }
+            else { detail += " · 请划掉抖音重开" }
 
             return .init(step: .init(name: name, ok: true, detail: detail), newPath: newURL.path)
         } catch {
@@ -161,6 +198,22 @@ enum DouyinOneTapReset {
                 newPath: nil
             )
         }
+    }
+
+    private static func pokeContainerManager(bundleID: String) -> Bool {
+        if let proxyClass = NSClassFromString("LSApplicationProxy") as? NSObject.Type {
+            let sel = NSSelectorFromString("applicationProxyForIdentifier:")
+            if proxyClass.responds(to: sel) {
+                _ = proxyClass.perform(sel, with: bundleID)
+            }
+        }
+        return true
+    }
+
+    private static func verifyContainerLink(bundleID: String, expectPath: String) -> Bool {
+        guard let url = AppContainerLocator.locateViaProxy(bundleID) else { return false }
+        return url.path == expectPath
+            || url.lastPathComponent.caseInsensitiveCompare(URL(fileURLWithPath: expectPath).lastPathComponent) == .orderedSame
     }
 
     private static func updateMetadataPlist(at container: URL, newUUID: String, bundleID: String) -> Bool {
@@ -186,14 +239,23 @@ enum DouyinOneTapReset {
             "/private/var/root/Library/MobileContainerManager/containers.sqlite",
             "/var/root/Library/MobileContainerManager/containers.sqlite",
             "/private/var/db/MobileContainerManager/containers.sqlite",
-            "/var/db/MobileContainerManager/containers.sqlite"
+            "/var/db/MobileContainerManager/containers.sqlite",
+            "/var/mobile/Library/MobileContainerManager/containers.sqlite",
+            "/private/var/mobile/Library/MobileContainerManager/containers.sqlite"
         ]
         let fm = FileManager.default
-        for root in ["/private/var/containers/Shared/SystemGroup", "/var/containers/Shared/SystemGroup"] {
-            guard let groups = try? fm.contentsOfDirectory(atPath: root) else { continue }
-            for g in groups where g.lowercased().contains("container") || g.lowercased().contains("mobile_container") {
-                let base = (root as NSString).appendingPathComponent(g)
-                candidates.append(contentsOf: findFiles(namedHints: ["containers.sqlite"], under: base, maxDepth: 5) ?? [])
+        // RootHide / jbroot 常见挂载前缀
+        let scanRoots = [
+            "/private/var/containers/Shared/SystemGroup",
+            "/var/containers/Shared/SystemGroup",
+            "/var/jb/var/containers/Shared/SystemGroup",
+            "/private/var/jb/var/containers/Shared/SystemGroup",
+            "/var/containers",
+            "/private/var/containers"
+        ]
+        for root in scanRoots where fm.fileExists(atPath: root) {
+            if let more = findFiles(namedHints: ["containers.sqlite", "containermanager"], under: root, maxDepth: 6) {
+                candidates.append(contentsOf: more.filter { $0.lowercased().hasSuffix(".sqlite") || $0.lowercased().hasSuffix(".db") })
             }
         }
 
@@ -219,6 +281,9 @@ enum DouyinOneTapReset {
             "UPDATE Containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
             "UPDATE Containers SET UUID='\(newUUID)', Path='\(escapedPath)' WHERE UUID='\(oldUUID)';",
             "UPDATE containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
+            "UPDATE Containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE identifier='\(bundleID)';",
+            "UPDATE Containers SET UUID='\(newUUID)', Path='\(escapedPath)' WHERE Identifier='\(bundleID)';",
+            "UPDATE containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE identifier='\(bundleID)';",
             "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE data_container_uuid='\(oldUUID)';",
             "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE identifier='\(bundleID)';"
         ]

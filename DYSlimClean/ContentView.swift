@@ -70,17 +70,40 @@ struct ContentView: View {
         } message: {
             Text(model.installMigrateText)
         }
+        .alert("随机新增缓存", isPresented: $model.showConfirmSeedCache) {
+            Button("取消", role: .cancel) {}
+            Button("开始生成") { model.seedRandomCache() }
+        } message: {
+            Text("按扫描到的缓存目录，随机写入一批新缓存文件（不改 mmkv/Aweme.db/AWEStorage 等账号文件）。建议先扫描再点。")
+        }
+        .alert("精简缓存", isPresented: $model.showCachePackResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.cachePackResultText)
+        }
+        .alert("还原会话", isPresented: $model.showConfirmSessionRestore) {
+            Button("取消", role: .cancel) {}
+            Button("确认还原", role: .destructive) { model.restoreSession() }
+        } message: {
+            Text("将用 Media/dysession 里最新的 *_session.zip 覆盖：改机参数、Keychain、抖音登录号料。请先划掉抖音（工具也会尝试结束进程）。移机前请确认新机已装巨魔/改机环境。")
+        }
+        .alert("会话备份/还原", isPresented: $model.showSessionResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.sessionResultText)
+        }
+        .alert("账号 / 商城检测", isPresented: $model.showProbeResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.probeResultText)
+        }
+        .alert("导出 CK（PC网页）", isPresented: $model.showCookieExportResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.cookieExportResultText)
+        }
         .onAppear {
             model.floatEnabled = FloatingBallController.shared.isVisible
-        }
-        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didScan)) { _ in
-            model.scan(fromFloat: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didSlim)) { _ in
-            model.requestSlimFromFloat()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: FloatingAction.didOneTap)) { _ in
-            model.runOneTapReset(fromFloat: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingAction.visibilityChanged)) { note in
             if let on = note.object as? Bool {
@@ -111,7 +134,7 @@ struct ContentView: View {
                     Text("DY助手")
                         .font(.system(size: 22, weight: .bold))
                         .foregroundColor(.white)
-                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "13.1")")
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "14.0")")
                         .font(.caption.weight(.bold))
                         .foregroundColor(accent)
                 }
@@ -354,13 +377,185 @@ struct ContentView: View {
             }
             .disabled(model.extraCount == 0 || model.isBusy)
 
+            HStack(spacing: 10) {
+                Button {
+                    model.exportSlimCache()
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isBusy && model.busyText.contains("导出") {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "square.and.arrow.up.on.square")
+                        }
+                        Text("导出精简缓存").fontWeight(.bold).font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.35, green: 0.55, blue: 1.0), Color(red: 0.2, green: 0.4, blue: 0.9)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(model.isBusy || !model.containerFound)
+
+                Button {
+                    model.showConfirmSeedCache = true
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isBusy && model.busyText.contains("随机") {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "plus.square.on.square")
+                        }
+                        Text("随机新增缓存").fontWeight(.bold).font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.55, green: 0.4, blue: 0.95), Color(red: 0.35, green: 0.25, blue: 0.75)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(model.isBusy || !model.containerFound)
+            }
+
+            Text("随机新增：在 Caches/VideoCache/tmp 等目录生成随机文件；不动账号关键数据。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
+
+            HStack(spacing: 10) {
+                Button {
+                    model.backupSession()
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isBusy && model.busyText.contains("备份会话") {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "externaldrive.badge.plus")
+                        }
+                        Text("备份会话").fontWeight(.bold).font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.15, green: 0.7, blue: 0.55), Color(red: 0.05, green: 0.5, blue: 0.45)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(model.isBusy || !model.containerFound)
+
+                Button {
+                    model.showConfirmSessionRestore = true
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isBusy && model.busyText.contains("还原会话") {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "arrow.counterclockwise.circle.fill")
+                        }
+                        Text("还原会话").fontWeight(.bold).font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(red: 0.95, green: 0.45, blue: 0.25), Color(red: 0.85, green: 0.25, blue: 0.2)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .disabled(model.isBusy || !model.containerFound)
+            }
+
+            Text("会话包=改机三件套（雷神/雷蛇参数 + Keychain + 号料），存 Media/dysession。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
+
+            Button {
+                model.probeAccountAndMall()
+            } label: {
+                HStack(spacing: 8) {
+                    if model.isBusy && model.busyText.contains("检测") {
+                        ProgressView().tint(.black)
+                    } else {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                    }
+                    Text(model.isBusy && model.busyText.contains("检测") ? model.busyText : "检测账号·商城·网络")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 1.0, green: 0.85, blue: 0.35), Color(red: 0.95, green: 0.65, blue: 0.2)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .foregroundColor(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .disabled(model.isBusy)
+
+            Text("不打开抖音：读沙盒 plist 账号 + gurd 商城资源 + DY助手自测网络/token。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
+
+            Button {
+                model.exportCookiesForPC()
+            } label: {
+                HStack(spacing: 8) {
+                    if model.isBusy && model.busyText.contains("导出 CK") {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: "globe")
+                    }
+                    Text("导出CK→PC网页")
+                        .fontWeight(.bold)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [Color(red: 0.25, green: 0.55, blue: 0.95), Color(red: 0.15, green: 0.35, blue: 0.8)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .foregroundColor(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .disabled(model.isBusy || !model.containerFound)
+
+            Text("导出 ZIP 到 Media/dyck/*_dyck.zip → PC「DY网页注入器」一键导入；也可 Cookie-Editor 用 JSON。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
+
             Button {
                 FloatingBallController.shared.toggle()
                 model.floatEnabled = FloatingBallController.shared.isVisible
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: model.floatEnabled ? "dot.circle.and.hand.point.up.left.fill" : "circle.dashed")
-                    Text(model.floatEnabled ? "关闭全局悬浮" : "打开全局悬浮")
+                    Text(model.floatEnabled ? "关闭悬浮球" : "打开悬浮球")
                         .fontWeight(.bold)
                 }
                 .frame(maxWidth: .infinity)

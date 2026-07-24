@@ -1,30 +1,28 @@
 import UIKit
 import AVFoundation
-import SwiftUI
 
 enum FloatingAction {
-    static let didScan = Notification.Name("dy.slim.float.scan")
-    static let didSlim = Notification.Name("dy.slim.float.slim")
-    static let didOneTap = Notification.Name("dy.slim.float.onetap")
     static let visibilityChanged = Notification.Name("dy.slim.float.visibility")
 }
 
-/// 全局悬浮球：窗口只包住球/菜单（整窗拖动），避免全屏穿透窗吞手势。
+/// 全屏穿透悬浮球：拖动只改球位置（不闪）；点开菜单直调 ViewModel。
+/// 切到其它 App 时靠静音音频 + SpringBoard 窗口权限尽量保活（进程被划掉仍会消失）。
 final class FloatingBallController: NSObject {
     static let shared = FloatingBallController()
 
     private(set) var isVisible = false
-    private var overlayWindow: UIWindow?
+    /// 强引用，避免只绑 weak 时回调空跑「没功能」
+    private var cleanModel: CleanViewModel?
+    private var overlayWindow: PassthroughWindow?
     private var host: FloatBallHostView?
     private var audioPlayer: AVAudioPlayer?
-    private var savedOrigin: CGPoint?
+    private var savedCenter: CGPoint?
     private var bgTask = UIBackgroundTaskIdentifier.invalid
+    private var keepAliveTimer: Timer?
 
-    private let ballSize: CGFloat = 48
-    private let chipSize: CGFloat = 40
-    private let chipCount: CGFloat = 4
-    private let chipGap: CGFloat = 8
-    private let pad: CGFloat = 6
+    private let ballSize: CGFloat = 52
+    private let prefsKey = "dy.slim.float.enabled"
+    private let centerKey = "dy.slim.float.center"
 
     private override init() {
         super.init()
@@ -34,10 +32,23 @@ final class FloatingBallController: NSObject {
         c.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
     }
 
+    func bind(cleanModel: CleanViewModel) {
+        self.cleanModel = cleanModel
+        // 上次开着悬浮，冷启动自动恢复
+        if UserDefaults.standard.bool(forKey: prefsKey), !isVisible {
+            show()
+        }
+    }
+
     func show() {
         DispatchQueue.main.async {
+            UserDefaults.standard.set(true, forKey: self.prefsKey)
             self.startKeepAlive()
-            self.presentOverlay()
+            if self.overlayWindow == nil {
+                self.presentOverlay()
+            } else {
+                self.reassertOverlay(forceKey: false)
+            }
             self.isVisible = true
             NotificationCenter.default.post(name: FloatingAction.visibilityChanged, object: true)
         }
@@ -45,9 +56,11 @@ final class FloatingBallController: NSObject {
 
     func hide() {
         DispatchQueue.main.async {
-            if let win = self.overlayWindow {
-                self.savedOrigin = win.frame.origin
+            if let c = self.host?.ballCenter {
+                self.savedCenter = c
+                UserDefaults.standard.set(NSStringFromCGPoint(c), forKey: self.centerKey)
             }
+            UserDefaults.standard.set(false, forKey: self.prefsKey)
             self.overlayWindow?.isHidden = true
             self.overlayWindow = nil
             self.host = nil
@@ -64,151 +77,140 @@ final class FloatingBallController: NSObject {
 
     @objc private func appWillResignActive() {
         guard isVisible else { return }
-        startKeepAlive(); beginBgTask(); reassertOverlay()
+        startKeepAlive()
+        beginBgTask()
+        // 不要反复 makeKey，会闪
+        reassertOverlay(forceKey: false)
     }
 
     @objc private func appDidEnterBackground() {
         guard isVisible else { return }
-        startKeepAlive(); beginBgTask(); reassertOverlay()
+        startKeepAlive()
+        beginBgTask()
+        reassertOverlay(forceKey: true)
     }
 
     @objc private func appDidBecomeActive() {
         guard isVisible else { return }
-        reassertOverlay()
+        reassertOverlay(forceKey: false)
+        startKeepAlive()
     }
 
+    /// AssistiveTouch 量级，避免 20亿 level 被系统反复打回导致闪烁
     private var systemFloatLevel: UIWindow.Level {
-        UIWindow.Level(rawValue: CGFloat(2_000_000_000))
-    }
-
-    private func collapsedSize() -> CGSize {
-        CGSize(width: ballSize + pad * 2, height: ballSize + pad * 2)
-    }
-
-    private func expandedSize() -> CGSize {
-        let menuH = chipSize * chipCount + chipGap * (chipCount - 1)
-        let w = max(ballSize, chipSize) + pad * 2
-        let h = ballSize + 10 + menuH + pad * 2
-        return CGSize(width: w, height: h)
+        UIWindow.Level(rawValue: 1_000_001)
     }
 
     private func presentOverlay() {
-        overlayWindow?.isHidden = true
-        overlayWindow = nil
-        host = nil
-
         let scene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first(where: { $0.activationState == .foregroundActive })
             ?? UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
 
-        let screenBounds = scene?.screen.bounds ?? UIScreen.main.bounds
-        let size = collapsedSize()
-        var origin = savedOrigin ?? CGPoint(
-            x: screenBounds.width - size.width - 10,
-            y: screenBounds.height * 0.42
-        )
-        origin = clampOrigin(origin, size: size, in: screenBounds)
-
-        let win: UIWindow
+        let bounds = scene?.screen.bounds ?? UIScreen.main.bounds
+        let win: PassthroughWindow
         if let scene {
-            win = UIWindow(windowScene: scene)
+            win = PassthroughWindow(windowScene: scene)
         } else {
-            win = UIWindow(frame: CGRect(origin: origin, size: size))
+            win = PassthroughWindow(frame: bounds)
         }
-        win.frame = CGRect(origin: origin, size: size)
+        win.frame = bounds
         win.backgroundColor = .clear
+        win.isOpaque = false
         win.windowLevel = systemFloatLevel
         applySystemFloatTricks(to: win)
 
-        let hostView = FloatBallHostView(ballSize: ballSize, chipSize: chipSize)
-        hostView.onDrag = { [weak self] translation in
-            self?.moveWindow(by: translation)
+        let hostView = FloatBallHostView(ballSize: ballSize)
+        hostView.frame = bounds
+        hostView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        if let s = UserDefaults.standard.string(forKey: centerKey) {
+            let p = CGPointFromString(s)
+            if p.x > 10, p.y > 10 {
+                hostView.initialCenter = p
+            }
+        } else if let c = savedCenter, c.x > 10, c.y > 10 {
+            hostView.initialCenter = c
         }
-        hostView.onDragEnded = { [weak self] in
-            self?.snapWindow()
+        hostView.onScan = { [weak self] in
+            guard let model = self?.cleanModel else {
+                self?.host?.flash("未绑定，请回助手页重开悬浮")
+                return
+            }
+            self?.host?.flash("扫描中…")
+            model.scan(fromFloat: true)
         }
-        hostView.onExpandChanged = { [weak self] expanded in
-            self?.resizeWindow(expanded: expanded)
+        hostView.onClean = { [weak self] in
+            guard let model = self?.cleanModel else {
+                self?.host?.flash("未绑定，请回助手页重开悬浮")
+                return
+            }
+            self?.host?.flash("清理中…")
+            model.requestSlimFromFloat()
         }
-        hostView.onScan = { NotificationCenter.default.post(name: FloatingAction.didScan, object: nil) }
-        hostView.onClean = { NotificationCenter.default.post(name: FloatingAction.didSlim, object: nil) }
-        hostView.onOneTap = { NotificationCenter.default.post(name: FloatingAction.didOneTap, object: nil) }
+        hostView.onOneTap = { [weak self] in
+            guard let model = self?.cleanModel else {
+                self?.host?.flash("未绑定，请回助手页重开悬浮")
+                return
+            }
+            self?.host?.flash("一键刷新中…")
+            model.runOneTapReset(fromFloat: true)
+        }
         hostView.onClose = { [weak self] in self?.hide() }
 
         let root = UIViewController()
+        root.view = PassthroughRootView(frame: bounds)
         root.view.backgroundColor = .clear
         root.view.addSubview(hostView)
-        hostView.frame = root.view.bounds
-        hostView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-
         win.rootViewController = root
+        win.isHidden = false
         win.makeKeyAndVisible()
+        // 立刻把 key 还回去，避免抢焦点闪屏，但仍保持悬浮窗可见
+        DispatchQueue.main.async {
+            Self.resignOverlayKeyIfNeeded(keeping: win)
+        }
+
         overlayWindow = win
         host = hostView
         UIApplication.shared.isIdleTimerDisabled = true
     }
 
-    private func moveWindow(by translation: CGPoint) {
-        guard let win = overlayWindow else { return }
-        var f = win.frame
-        f.origin.x += translation.x
-        f.origin.y += translation.y
-        let bounds = win.windowScene?.screen.bounds ?? UIScreen.main.bounds
-        f.origin = clampOrigin(f.origin, size: f.size, in: bounds)
-        win.frame = f
-    }
-
-    private func snapWindow() {
-        guard let win = overlayWindow else { return }
-        let bounds = win.windowScene?.screen.bounds ?? UIScreen.main.bounds
-        var f = win.frame
-        f.origin = clampOrigin(f.origin, size: f.size, in: bounds)
-        UIView.animate(withDuration: 0.15) { win.frame = f }
-        savedOrigin = f.origin
-    }
-
-    private func resizeWindow(expanded: Bool) {
-        guard let win = overlayWindow else { return }
-        let bounds = win.windowScene?.screen.bounds ?? UIScreen.main.bounds
-        let newSize = expanded ? expandedSize() : collapsedSize()
-        var f = win.frame
-        // 展开时向上长，球仍在窗口底部
-        if expanded {
-            let bottom = f.maxY
-            f.size = newSize
-            f.origin.y = bottom - newSize.height
-        } else {
-            let bottom = f.maxY
-            f.size = newSize
-            f.origin.y = bottom - newSize.height
+    private static func resignOverlayKeyIfNeeded(keeping win: UIWindow) {
+        guard win.isKeyWindow else { return }
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for w in scene.windows where w !== win && !w.isHidden {
+                w.makeKey()
+                return
+            }
         }
-        f.origin = clampOrigin(f.origin, size: f.size, in: bounds)
-        UIView.animate(withDuration: 0.18) {
-            win.frame = f
-            self.host?.frame = CGRect(origin: .zero, size: newSize)
+    }
+
+    private func reassertOverlay(forceKey: Bool) {
+        guard let win = overlayWindow else {
+            if isVisible { presentOverlay() }
+            return
         }
-        savedOrigin = f.origin
-    }
-
-    private func clampOrigin(_ origin: CGPoint, size: CGSize, in bounds: CGRect) -> CGPoint {
-        let x = min(max(4, origin.x), bounds.width - size.width - 4)
-        let y = min(max(40, origin.y), bounds.height - size.height - 4)
-        return CGPoint(x: x, y: y)
-    }
-
-    private func reassertOverlay() {
-        guard let win = overlayWindow else { return }
         applySystemFloatTricks(to: win)
         win.windowLevel = systemFloatLevel
         win.isHidden = false
-        win.makeKeyAndVisible()
+        if forceKey || UIApplication.shared.applicationState != .active {
+            win.makeKeyAndVisible()
+            DispatchQueue.main.async {
+                Self.resignOverlayKeyIfNeeded(keeping: win)
+            }
+        }
     }
 
     private func applySystemFloatTricks(to win: UIWindow) {
-        let selVisible = NSSelectorFromString("setCanBecomeVisibleWithoutActiveApp:")
-        if win.responds(to: selVisible) {
-            _ = win.perform(selVisible, with: true)
+        let tricks = [
+            "setCanBecomeVisibleWithoutActiveApp:",
+            "_setCanBecomeVisibleWithoutActiveApp:",
+            "setKeepContextInBackground:",
+            "_setSecure:"
+        ]
+        for name in tricks {
+            let sel = NSSelectorFromString(name)
+            guard win.responds(to: sel) else { continue }
+            win.perform(sel, with: true)
         }
         win.windowLevel = systemFloatLevel
     }
@@ -227,7 +229,7 @@ final class FloatingBallController: NSObject {
     }
 
     private func startKeepAlive() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers])
+        try? AVAudioSession.sharedInstance().setCategory(.playback, options: [.mixWithOthers, .duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
         if audioPlayer == nil, let url = Self.makeSilentWavURL() {
             audioPlayer = try? AVAudioPlayer(contentsOf: url)
@@ -238,9 +240,26 @@ final class FloatingBallController: NSObject {
         audioPlayer?.play()
         UIApplication.shared.isIdleTimerDisabled = true
         beginBgTask()
+
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = Timer.scheduledTimer(withTimeInterval: 12, repeats: true) { [weak self] _ in
+            guard let self, self.isVisible else { return }
+            if self.audioPlayer?.isPlaying != true {
+                self.audioPlayer?.play()
+            }
+            self.beginBgTask()
+            if UIApplication.shared.applicationState != .active {
+                self.reassertOverlay(forceKey: true)
+            }
+        }
+        if let t = keepAliveTimer {
+            RunLoop.main.add(t, forMode: .common)
+        }
     }
 
     private func stopKeepAlive() {
+        keepAliveTimer?.invalidate()
+        keepAliveTimer = nil
         audioPlayer?.stop()
         UIApplication.shared.isIdleTimerDisabled = false
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
@@ -259,34 +278,94 @@ final class FloatingBallController: NSObject {
     }
 }
 
-// MARK: - 球 + 菜单（画在小窗口里）
+final class PassthroughWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event) else { return nil }
+        if hit === self || hit === rootViewController?.view { return nil }
+        return hit
+    }
+}
 
-final class FloatBallHostView: UIView {
-    var onDrag: ((CGPoint) -> Void)?
-    var onDragEnded: (() -> Void)?
-    var onExpandChanged: ((Bool) -> Void)?
+final class PassthroughRootView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
+}
+
+final class FloatBallHostView: UIView, UIGestureRecognizerDelegate {
     var onScan: (() -> Void)?
     var onClean: (() -> Void)?
     var onOneTap: (() -> Void)?
     var onClose: (() -> Void)?
+    var initialCenter: CGPoint?
 
     private let ballSize: CGFloat
-    private let chipSize: CGFloat
+    private let chipH: CGFloat = 36
+    private let chipW: CGFloat = 78
     private let ball = UIView()
-    private var strip: UIStackView?
-    private var statusLabel: UILabel?
-    private var expanded = false
-    private var didDrag = false
-    private var lastPanPoint: CGPoint = .zero
+    private var menuContainer: UIView?
+    private var statusLabel: UILabel!
+    private var didPlaceBall = false
+    private var isDragging = false
+    private var panStartCenter: CGPoint = .zero
 
-    init(ballSize: CGFloat, chipSize: CGFloat) {
+    var ballCenter: CGPoint { ball.center }
+
+    init(ballSize: CGFloat) {
         self.ballSize = ballSize
-        self.chipSize = chipSize
         super.init(frame: .zero)
         backgroundColor = .clear
         isUserInteractionEnabled = true
-        setupBall()
-        setupStatus()
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:)") }
+
+    private func setup() {
+        ball.bounds = CGRect(x: 0, y: 0, width: ballSize, height: ballSize)
+        ball.backgroundColor = UIColor(red: 0.07, green: 0.12, blue: 0.2, alpha: 0.96)
+        ball.layer.cornerRadius = ballSize / 2
+        ball.layer.borderWidth = 1.5
+        ball.layer.borderColor = UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 1).cgColor
+        ball.layer.shadowOpacity = 0.3
+        ball.layer.shadowRadius = 3
+        ball.isUserInteractionEnabled = true
+
+        let lab = UILabel(frame: ball.bounds)
+        lab.text = "DY"
+        lab.textAlignment = .center
+        lab.font = .systemFont(ofSize: 14, weight: .black)
+        lab.textColor = .white
+        lab.isUserInteractionEnabled = false
+        ball.addSubview(lab)
+        addSubview(ball)
+
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(onPan(_:)))
+        pan.maximumNumberOfTouches = 1
+        pan.delegate = self
+        ball.addGestureRecognizer(pan)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(onTap))
+        tap.delegate = self
+        ball.addGestureRecognizer(tap)
+
+        statusLabel = UILabel()
+        statusLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        statusLabel.textColor = .white
+        statusLabel.textAlignment = .center
+        statusLabel.backgroundColor = UIColor(white: 0.05, alpha: 0.9)
+        statusLabel.layer.cornerRadius = 10
+        statusLabel.clipsToBounds = true
+        statusLabel.isHidden = true
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
+            statusLabel.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            statusLabel.heightAnchor.constraint(equalToConstant: 32)
+        ])
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(onBusyNote(_:)),
@@ -295,208 +374,161 @@ final class FloatBallHostView: UIView {
         )
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:)") }
-
     override func layoutSubviews() {
         super.layoutSubviews()
-        // 球贴窗口底边居中
-        ball.bounds = CGRect(x: 0, y: 0, width: ballSize, height: ballSize)
-        ball.center = CGPoint(x: bounds.midX, y: bounds.height - 6 - ballSize / 2)
-        layoutStrip()
-    }
-
-    private func setupBall() {
-        ball.backgroundColor = UIColor(red: 0.07, green: 0.12, blue: 0.2, alpha: 0.96)
-        ball.layer.cornerRadius = ballSize / 2
-        ball.layer.borderWidth = 1.5
-        ball.layer.borderColor = UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 1).cgColor
-        ball.layer.shadowOpacity = 0.35
-        ball.layer.shadowRadius = 4
-        ball.layer.shadowOffset = CGSize(width: 0, height: 2)
-        ball.isUserInteractionEnabled = true
-
-        if let img = UIImage(named: "FloatIcon") {
-            let iv = UIImageView(frame: CGRect(x: 6, y: 6, width: ballSize - 12, height: ballSize - 12))
-            iv.image = img
-            iv.contentMode = .scaleAspectFill
-            iv.clipsToBounds = true
-            iv.layer.cornerRadius = (ballSize - 12) / 2
-            iv.isUserInteractionEnabled = false
-            ball.addSubview(iv)
-        } else {
-            let lab = UILabel(frame: CGRect(x: 0, y: 0, width: ballSize, height: ballSize))
-            lab.text = "DY"
-            lab.textAlignment = .center
-            lab.font = .systemFont(ofSize: 13, weight: .black)
-            lab.textColor = .white
-            lab.isUserInteractionEnabled = false
-            ball.addSubview(lab)
+        // 只首次定位，拖动时绝不在 layout 里改 center（闪的主因）
+        if !didPlaceBall, bounds.width > 1, !isDragging {
+            if let c = initialCenter { ball.center = clamp(c) }
+            else { ball.center = CGPoint(x: bounds.width - 36, y: bounds.height * 0.42) }
+            didPlaceBall = true
         }
-
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(pan(_:)))
-        pan.maximumNumberOfTouches = 1
-        ball.addGestureRecognizer(pan)
-        addSubview(ball)
+        if menuContainer != nil {
+            layoutMenu()
+        }
     }
 
-    private func setupStatus() {
-        let lab = UILabel()
-        lab.font = .systemFont(ofSize: 10, weight: .semibold)
-        lab.textColor = .white
-        lab.textAlignment = .center
-        lab.backgroundColor = UIColor(white: 0.05, alpha: 0.88)
-        lab.layer.cornerRadius = 8
-        lab.clipsToBounds = true
-        lab.isHidden = true
-        lab.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(lab)
-        statusLabel = lab
-        // 状态条放在球上方一点（展开时仍可见区域有限，主要靠 Notification 短闪）
-        NSLayoutConstraint.activate([
-            lab.centerXAnchor.constraint(equalTo: centerXAnchor),
-            lab.topAnchor.constraint(equalTo: topAnchor, constant: 2),
-            lab.widthAnchor.constraint(greaterThanOrEqualToConstant: 72),
-            lab.heightAnchor.constraint(equalToConstant: 22)
-        ])
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
     }
 
-    @objc private func pan(_ g: UIPanGestureRecognizer) {
+    private func clamp(_ c: CGPoint) -> CGPoint {
+        let half = ballSize / 2
+        guard bounds.width > 1 else { return c }
+        return CGPoint(
+            x: min(max(half + 4, c.x), bounds.width - half - 4),
+            y: min(max(half + 48, c.y), bounds.height - half - 4)
+        )
+    }
+
+    @objc private func onPan(_ g: UIPanGestureRecognizer) {
         switch g.state {
         case .began:
-            didDrag = false
-            lastPanPoint = g.location(in: nil)
-            if expanded {
-                setExpanded(false, animated: true)
-                onExpandChanged?(false)
-            }
+            isDragging = false
+            panStartCenter = ball.center
+            if menuContainer != nil { collapseMenu() }
+            ball.layer.shadowOpacity = 0
         case .changed:
-            let p = g.location(in: nil)
-            let dx = p.x - lastPanPoint.x
-            let dy = p.y - lastPanPoint.y
-            if hypot(dx, dy) > 2 { didDrag = true }
-            lastPanPoint = p
-            onDrag?(CGPoint(x: dx, y: dy))
-        case .ended, .cancelled:
-            if !didDrag {
-                toggleExpand()
-            } else {
-                onDragEnded?()
-            }
-            didDrag = false
+            let t = g.translation(in: self)
+            if hypot(t.x, t.y) > 4 { isDragging = true }
+            // 关隐式动画，避免一闪一闪
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            ball.center = clamp(CGPoint(x: panStartCenter.x + t.x, y: panStartCenter.y + t.y))
+            CATransaction.commit()
+        case .ended, .cancelled, .failed:
+            ball.layer.shadowOpacity = 0.3
+            isDragging = false
         default:
             break
         }
     }
 
-    private func toggleExpand() {
-        let next = !expanded
-        onExpandChanged?(next)
-        setExpanded(next, animated: true)
+    @objc private func onTap() {
+        if menuContainer != nil { collapseMenu() } else { expandMenu() }
     }
 
-    func setExpanded(_ on: Bool, animated: Bool) {
-        expanded = on
-        strip?.removeFromSuperview()
-        strip = nil
-        guard on else { return }
+    func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        false
+    }
 
-        let stack = UIStackView()
-        stack.axis = .vertical
-        stack.spacing = 8
-        stack.alignment = .center
-        stack.translatesAutoresizingMaskIntoConstraints = true
-        stack.addArrangedSubview(chip("扫描", UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 1), #selector(doScan)))
-        stack.addArrangedSubview(chip("清理", UIColor(red: 1, green: 0.35, blue: 0.4, alpha: 1), #selector(doClean)))
-        stack.addArrangedSubview(chip("一键刷新", UIColor(red: 0.35, green: 0.85, blue: 0.45, alpha: 1), #selector(doOneTap)))
-        stack.addArrangedSubview(chip("关悬浮", UIColor(white: 0.92, alpha: 1), #selector(doClose)))
-        addSubview(stack)
-        strip = stack
-        layoutStrip()
-        if animated {
-            stack.alpha = 0
-            stack.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-            UIView.animate(withDuration: 0.18) {
-                stack.alpha = 1
-                stack.transform = .identity
-            }
+    private func expandMenu() {
+        collapseMenu()
+        let box = UIView()
+        box.backgroundColor = UIColor(red: 0.08, green: 0.1, blue: 0.14, alpha: 0.96)
+        box.layer.cornerRadius = 14
+        box.layer.borderWidth = 1
+        box.layer.borderColor = UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 0.45).cgColor
+        box.isUserInteractionEnabled = true
+
+        let titles = ["扫描", "清理", "一键刷新", "关悬浮"]
+        let colors: [UIColor] = [
+            UIColor(red: 0.15, green: 0.85, blue: 0.78, alpha: 1),
+            UIColor(red: 1, green: 0.35, blue: 0.4, alpha: 1),
+            UIColor(red: 0.35, green: 0.85, blue: 0.45, alpha: 1),
+            UIColor(white: 0.9, alpha: 1)
+        ]
+        let actions: [Selector] = [#selector(doScan), #selector(doClean), #selector(doOneTap), #selector(doClose)]
+        let pad: CGFloat = 8
+        let gap: CGFloat = 6
+        let totalH = pad * 2 + chipH * 4 + gap * 3
+        box.bounds = CGRect(x: 0, y: 0, width: chipW + pad * 2, height: totalH)
+
+        for i in 0..<4 {
+            let b = UIButton(type: .system)
+            b.frame = CGRect(x: pad, y: pad + CGFloat(i) * (chipH + gap), width: chipW, height: chipH)
+            b.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.2, alpha: 1)
+            b.layer.cornerRadius = 10
+            b.layer.borderWidth = 1
+            b.layer.borderColor = colors[i].withAlphaComponent(0.85).cgColor
+            b.setTitle(titles[i], for: .normal)
+            b.setTitleColor(colors[i], for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
+            b.addTarget(self, action: actions[i], for: .touchUpInside)
+            box.addSubview(b)
         }
+        addSubview(box)
+        menuContainer = box
+        layoutMenu()
+        box.alpha = 0
+        UIView.animate(withDuration: 0.12) { box.alpha = 1 }
+        flash("点菜单执行")
     }
 
-    private func layoutStrip() {
-        guard let strip else { return }
-        let h = chipSize * 4 + 8 * 3
-        let w = chipSize
-        strip.frame = CGRect(
-            x: (bounds.width - w) / 2,
-            y: ball.frame.minY - h - 10,
-            width: w,
-            height: h
-        )
+    private func collapseMenu() {
+        menuContainer?.removeFromSuperview()
+        menuContainer = nil
     }
 
-    private func chip(_ title: String, _ color: UIColor, _ action: Selector) -> UIView {
-        let wrap = UIView(frame: CGRect(x: 0, y: 0, width: chipSize, height: chipSize))
-        wrap.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            wrap.widthAnchor.constraint(equalToConstant: chipSize),
-            wrap.heightAnchor.constraint(equalToConstant: chipSize)
-        ])
-        let b = UIButton(type: .custom)
-        b.frame = wrap.bounds
-        b.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        b.backgroundColor = UIColor(red: 0.1, green: 0.13, blue: 0.18, alpha: 0.96)
-        b.layer.cornerRadius = chipSize / 2
-        b.layer.borderWidth = 1
-        b.layer.borderColor = color.withAlphaComponent(0.85).cgColor
-        b.setTitle(title, for: .normal)
-        b.setTitleColor(color, for: .normal)
-        b.titleLabel?.font = .systemFont(ofSize: title.count > 2 ? 8 : 11, weight: .bold)
-        b.titleLabel?.numberOfLines = 2
-        b.titleLabel?.textAlignment = .center
-        b.addTarget(self, action: action, for: .touchUpInside)
-        wrap.addSubview(b)
-        return wrap
+    private func layoutMenu() {
+        guard let box = menuContainer else { return }
+        let w = box.bounds.width
+        let h = box.bounds.height
+        var x = ball.center.x - w / 2
+        x = min(max(8, x), bounds.width - w - 8)
+        let above = ball.frame.minY - h - 10
+        let y = above > 50 ? above : ball.frame.maxY + 10
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        box.frame = CGRect(x: x, y: y, width: w, height: h)
+        CATransaction.commit()
     }
 
-    @objc private func doScan() { collapseThen { self.onScan?() }; flash("后台扫描中…") }
-    @objc private func doClean() { collapseThen { self.onClean?() }; flash("后台清理中…") }
-    @objc private func doOneTap() { collapseThen { self.onOneTap?() }; flash("一键刷新中…") }
-    @objc private func doClose() { collapseThen { self.onClose?() } }
+    @objc private func doScan() {
+        collapseMenu()
+        onScan?()
+    }
 
-    private func collapseThen(_ block: @escaping () -> Void) {
-        if expanded {
-            setExpanded(false, animated: true)
-            onExpandChanged?(false)
-        }
-        block()
+    @objc private func doClean() {
+        collapseMenu()
+        onClean?()
+    }
+
+    @objc private func doOneTap() {
+        collapseMenu()
+        onOneTap?()
+    }
+
+    @objc private func doClose() {
+        collapseMenu()
+        onClose?()
     }
 
     @objc private func onBusyNote(_ note: Notification) {
-        if let text = note.object as? String { flash(text) }
+        if let t = note.object as? String { flash(t) }
     }
 
-    private func flash(_ text: String) {
-        guard let statusLabel else { return }
-        statusLabel.text = " \(text) "
+    func flash(_ text: String) {
+        statusLabel.text = "  \(text)  "
         statusLabel.isHidden = false
         statusLabel.alpha = 1
         NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(hideStatus), object: nil)
-        perform(#selector(hideStatus), with: nil, afterDelay: 1.6)
+        perform(#selector(hideStatus), with: nil, afterDelay: 1.8)
     }
 
     @objc private func hideStatus() {
-        UIView.animate(withDuration: 0.25) { self.statusLabel?.alpha = 0 } completion: { _ in
-            self.statusLabel?.isHidden = true
+        UIView.animate(withDuration: 0.2) { self.statusLabel.alpha = 0 } completion: { _ in
+            self.statusLabel.isHidden = true
         }
     }
-}
-
-struct FloatPiPAnchor: UIViewRepresentable {
-    func makeUIView(context: Context) -> UIView {
-        let v = UIView(frame: .zero)
-        v.isUserInteractionEnabled = false
-        v.isHidden = true
-        return v
-    }
-    func updateUIView(_ uiView: UIView, context: Context) {}
 }

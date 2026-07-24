@@ -1,0 +1,41 @@
+# 一键上传说明（v14.0）
+
+## 你只要上传这一个文件夹
+
+桌面：`DYSlimClean`（整夹覆盖到 GitHub 仓库的 `DYSlimClean/`）
+
+仓库最终结构：
+
+```
+DY2/
+  .github/workflows/build-tipa.yml   ← 本包内「workflows-build-tipa.yml」上传到这里
+  DYSlimClean/                       ← 桌面整个 DYSlimClean 文件夹内容丢进去
+    project.yml
+    scripts/package-tipa.sh
+    ContentView.swift
+    Services/...
+    Resources/...
+```
+
+### 上传步骤
+1. 打开 https://github.com/t23456742-blip/DY2
+2. 把桌面 `DYSlimClean` **整个文件夹** 覆盖进仓库的 `DYSlimClean/`
+3. 把包内 `workflows-build-tipa.yml` 上传为 `.github/workflows/build-tipa.yml`
+4. Actions → Build TIPA → Run workflow → 下 tipa → 巨魔安装
+
+## 手机功能一览（已整合）
+- 扫描 / 精简清理 / 清理前备份
+- 会话备份·还原（雷神/雷蛇参数 + Keychain + 号料）
+- 检测账号·商城·网络（不打开抖音）
+- **导出CK→PC网页** → `Media/dyck/*_dyck.zip`
+- 随机新增缓存 / 悬浮球 / 规则 / 一键四项 / 移机粘贴
+
+## PC 配套（不编进 tipa）
+桌面另有：`PC配套-DY网页注入器`
+1. 安装依赖.bat
+2. 启动.bat → 导入手机 `*_dyck.zip` → 隔离多开内置浏览器打开抖音
+
+### 手机 ZIP 路径
+```
+/private/var/mobile/Media/dyck/时间戳_dyck.zip
+```

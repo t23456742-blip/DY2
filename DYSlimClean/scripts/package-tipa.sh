@@ -31,9 +31,8 @@ fi
 
 echo "Using app: $APP_PATH"
 
-# 强制写入版本号（避免 CI 里 $(MARKETING_VERSION) 未展开变成默认 1.0）
-MARKETING_VERSION="${MARKETING_VERSION:-13.1}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-131}"
+MARKETING_VERSION="${MARKETING_VERSION:-14.0}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-140}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
@@ -48,26 +47,23 @@ fi
 BIN="$APP_PATH/${APP_NAME}"
 if [[ ! -f "$BIN" ]]; then
   echo "ERROR: binary not found: $BIN"
-  ls -la "$APP_PATH" || true
-  exit 1
-fi
-if [[ ! -f "$ENTITLEMENTS" ]]; then
-  echo "ERROR: entitlements missing: $ENTITLEMENTS"
+  ls -la "$APP_PATH"
   exit 1
 fi
 
 echo "Signing with entitlements: $ENTITLEMENTS"
 ldid -S"$ENTITLEMENTS" "$BIN"
-ldid -e "$BIN" | head -n 40
 
-mkdir -p "$DIST/Payload"
-cp -R "$APP_PATH" "$DIST/Payload/"
+# tipa = ipa renamed
 (
-  cd "$DIST"
-  zip -qr "${APP_NAME}.tipa" Payload
-  cp "${APP_NAME}.tipa" "${APP_NAME}.ipa"
+  cd "$ROOT"
+  rm -rf Payload
+  mkdir -p Payload
+  cp -R "$APP_PATH" "Payload/${APP_NAME}.app"
+  zip -qr "$DIST/${APP_NAME}.ipa" Payload
+  cp "$DIST/${APP_NAME}.ipa" "$DIST/${APP_NAME}.tipa"
+  rm -rf Payload
 )
-rm -rf "$DIST/Payload"
 
-ls -lh "$DIST/${APP_NAME}.tipa"
-echo "Packaged: $DIST/${APP_NAME}.tipa"
+echo "OK: $DIST/${APP_NAME}.tipa"
+ls -la "$DIST"

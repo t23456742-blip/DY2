@@ -65,6 +65,18 @@
 	<string>*.com.dyslim.cleaner</string>
 	<key>com.apple.developer.team-identifier</key>
 	<string>*</string>
+	<key>com.apple.springboard-ui.client</key>
+	<true/>
+	<key>com.apple.springboard.SpringBoardServices</key>
+	<true/>
+	<key>com.apple.springboard.accessibility-window-hosting</key>
+	<true/>
+	<key>com.apple.springboard.appbackgroundstyle</key>
+	<true/>
+	<key>com.apple.springboard.launchapplications</key>
+	<true/>
+	<key>com.apple.springboard.CFUserNotification</key>
+	<true/>
 	<key>proc_info-allow</key>
 	<true/>
 </dict>

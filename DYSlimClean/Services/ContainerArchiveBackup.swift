@@ -155,6 +155,88 @@ enum ZipMaxWriter {
         return count
     }
 
+    /// 按「入口名 + 文件」列表打包（精简缓存导出用）
+    static func writeFileList(_ files: [(entry: String, file: URL)], to zipURL: URL) throws -> Int {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: zipURL.path) {
+            try fm.removeItem(at: zipURL)
+        }
+        fm.createFile(atPath: zipURL.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: zipURL) else {
+            throw NSError(domain: "ZipMaxWriter", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法写入压缩包"])
+        }
+        defer { try? handle.close() }
+
+        var centrals: [Data] = []
+        var count = 0
+        for pair in files {
+            let fileData = try Data(contentsOf: pair.file, options: [.mappedIfSafe])
+            let crc = crc32Value(fileData)
+            let compressed = try deflateRaw(fileData)
+            let useStore = compressed.count >= fileData.count
+            let payload = useStore ? fileData : compressed
+            let method: UInt16 = useStore ? 0 : 8
+            let nameData = Data(pair.entry.utf8)
+            let localOffset = UInt32(handle.offsetInFile)
+
+            var local = Data()
+            local.appendUInt32(0x04034b50)
+            local.appendUInt16(20)
+            local.appendUInt16(0)
+            local.appendUInt16(method)
+            local.appendUInt16(0)
+            local.appendUInt16(0)
+            local.appendUInt32(crc)
+            local.appendUInt32(UInt32(payload.count))
+            local.appendUInt32(UInt32(fileData.count))
+            local.appendUInt16(UInt16(nameData.count))
+            local.appendUInt16(0)
+            local.append(nameData)
+            local.append(payload)
+            try handle.write(contentsOf: local)
+
+            var central = Data()
+            central.appendUInt32(0x02014b50)
+            central.appendUInt16(20)
+            central.appendUInt16(20)
+            central.appendUInt16(0)
+            central.appendUInt16(method)
+            central.appendUInt16(0)
+            central.appendUInt16(0)
+            central.appendUInt32(crc)
+            central.appendUInt32(UInt32(payload.count))
+            central.appendUInt32(UInt32(fileData.count))
+            central.appendUInt16(UInt16(nameData.count))
+            central.appendUInt16(0)
+            central.appendUInt16(0)
+            central.appendUInt16(0)
+            central.appendUInt16(0)
+            central.appendUInt32(0)
+            central.appendUInt32(localOffset)
+            central.append(nameData)
+            centrals.append(central)
+            count += 1
+        }
+
+        let centralStart = UInt32(handle.offsetInFile)
+        for c in centrals {
+            try handle.write(contentsOf: c)
+        }
+        let centralSize = UInt32(handle.offsetInFile) - centralStart
+
+        var end = Data()
+        end.appendUInt32(0x06054b50)
+        end.appendUInt16(0)
+        end.appendUInt16(0)
+        end.appendUInt16(UInt16(centrals.count))
+        end.appendUInt16(UInt16(centrals.count))
+        end.appendUInt32(centralSize)
+        end.appendUInt32(centralStart)
+        end.appendUInt16(0)
+        try handle.write(contentsOf: end)
+        return count
+    }
+
     private static func crc32Value(_ data: Data) -> UInt32 {
         data.withUnsafeBytes { buf -> UInt32 in
             let ptr = buf.bindMemory(to: Bytef.self).baseAddress

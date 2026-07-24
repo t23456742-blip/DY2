@@ -41,10 +41,22 @@ final class CleanViewModel: ObservableObject {
     ]
     @Published var showOneTapResult = false
     @Published var oneTapResultText = ""
+    @Published var showCachePackResult = false
+    @Published var cachePackResultText = ""
+    @Published var showConfirmSeedCache = false
+    @Published var showConfirmSessionRestore = false
+    @Published var showSessionResult = false
+    @Published var sessionResultText = ""
+    @Published var showProbeResult = false
+    @Published var probeResultText = ""
+    @Published var showCookieExportResult = false
+    @Published var cookieExportResultText = ""
 
     private let cleaner = SlimCleaner()
     private var extras: [URL] = []
     private var extraBytes: Int64 = 0
+    /// 最近一次扫描的相对路径，随机新增缓存时参考目录
+    private var lastScanRels: [String] = []
 
     private static let sizeFormatter: ByteCountFormatter = {
         let f = ByteCountFormatter()
@@ -372,6 +384,7 @@ final class CleanViewModel: ObservableObject {
         totalCount = result.total
         keepHitCount = result.keepHits
         extras = result.extras
+        lastScanRels = result.relativePaths
         extraCount = result.extras.count
         extraBytes = result.extraBytes
         extraSizeText = Self.formatBytes(extraBytes)
@@ -392,6 +405,167 @@ final class CleanViewModel: ObservableObject {
             afterBytes = result.keepBytes
             afterSizeText = Self.formatBytes(result.keepBytes) + "（预估）"
             savedSizeText = Self.formatBytes(result.extraBytes) + "（可释放）"
+        }
+    }
+
+    /// 按扫描目录随机新增缓存（不写回 zip，不动账号关键文件）
+    func seedRandomCache() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "随机新增缓存…"
+        log("开始随机新增缓存…")
+        let hints = lastScanRels
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let container = cleaner.locateAwemeContainer() else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.cachePackResultText = "未找到抖音容器"
+                    self.showCachePackResult = true
+                    self.log("随机缓存失败：未找到抖音容器")
+                }
+                return
+            }
+            let r = DouyinRandomCacheSeeder.seedRandomCache(into: container, hintRels: hints)
+            await MainActor.run {
+                self.isBusy = false
+                self.cachePackResultText = r.message
+                self.showCachePackResult = true
+                self.log(r.message)
+                if r.ok {
+                    self.containerFound = true
+                    self.containerPath = container.path
+                }
+            }
+        }
+    }
+
+    /// 按白名单把「可保留」文件打成精简缓存包（可选备份）
+    func exportSlimCache() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "导出精简缓存…"
+        log("开始导出精简缓存包…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let container = cleaner.locateAwemeContainer() else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.cachePackResultText = "未找到抖音容器"
+                    self.showCachePackResult = true
+                    self.log("导出失败：未找到抖音容器")
+                }
+                return
+            }
+            let r = DouyinSlimCachePack.exportKeepCache(container: container, cleaner: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.cachePackResultText = r.message
+                self.showCachePackResult = true
+                self.log(r.message)
+                if r.ok {
+                    self.containerFound = true
+                    self.containerPath = container.path
+                }
+            }
+        }
+    }
+
+    /// 把最近一份精简缓存包注入当前抖音容器
+    func importSlimCache() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "注入精简缓存…"
+        log("开始注入精简缓存…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let container = cleaner.locateAwemeContainer() else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.cachePackResultText = "未找到抖音容器"
+                    self.showCachePackResult = true
+                    self.log("注入失败：未找到抖音容器")
+                }
+                return
+            }
+            let r = DouyinSlimCachePack.importKeepCache(into: container)
+            await MainActor.run {
+                self.isBusy = false
+                self.cachePackResultText = r.message
+                self.showCachePackResult = true
+                self.log(r.message)
+            }
+        }
+    }
+
+    /// 精简会话备份：改机参数 + Keychain + 抖音登录号料
+    func backupSession() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "备份会话…"
+        log("开始精简会话备份（参数+钥匙串+号料）…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            let r = DouyinSessionBackup.backup(cleaner: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.sessionResultText = r.message
+                self.showSessionResult = true
+                self.log(r.message)
+                if r.ok {
+                    self.containerFound = true
+                }
+            }
+        }
+    }
+
+    /// 还原最近一份会话包（先杀抖音再写入）
+    func restoreSession() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "还原会话…"
+        log("开始还原精简会话…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            let r = DouyinSessionBackup.restore(into: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.sessionResultText = r.message
+                self.showSessionResult = true
+                self.log(r.message)
+            }
+        }
+    }
+
+    /// 不打开抖音：读沙盒账号 + 商城本地资源 + 本机网络
+    func probeAccountAndMall() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "检测账号/商城…"
+        log("开始检测账号与商城（不启动抖音）…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            let r = DouyinAccountProbe.inspect(cleaner: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.probeResultText = r.message
+                self.showProbeResult = true
+                self.log(r.message)
+                if r.hasAccount {
+                    self.containerFound = true
+                }
+            }
+        }
+    }
+
+    /// 提取抖音 Cookies，导出给 PC Chrome Cookie-Editor 导入（网页端）
+    func exportCookiesForPC() {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "导出 CK…"
+        log("开始导出抖音 Cookies（PC 网页）…")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            let r = DouyinCookieExport.export(cleaner: cleaner)
+            await MainActor.run {
+                self.isBusy = false
+                self.cookieExportResultText = r.message
+                self.showCookieExportResult = true
+                self.log(r.message)
+            }
         }
     }
 

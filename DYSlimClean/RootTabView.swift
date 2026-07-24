@@ -21,6 +21,9 @@ struct RootTabView: View {
         .accentColor(Color(red: 0.15, green: 0.85, blue: 0.78))
         .preferredColorScheme(.dark)
         .environment(\.locale, Locale(identifier: "zh_CN"))
-        .onAppear { cleanModel.bootstrap() }
+        .onAppear {
+            cleanModel.bootstrap()
+            FloatingBallController.shared.bind(cleanModel: cleanModel)
+        }
     }
 }

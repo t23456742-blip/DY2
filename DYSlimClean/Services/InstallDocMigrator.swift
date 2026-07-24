@@ -77,6 +77,13 @@ enum AppContainerLocator {
     ]
 
     static func locateContainer(bundleIDs: [String]) -> (bundleID: String, url: URL)? {
+        // 有数据的优先，避免半刷新后的空壳
+        for bid in bundleIDs {
+            if let url = locateViaMetadata(bid), containerLooksPopulated(url) { return (bid, url) }
+        }
+        for bid in bundleIDs {
+            if let url = locateViaProxy(bid), containerLooksPopulated(url) { return (bid, url) }
+        }
         for bid in bundleIDs {
             if let url = locateViaProxy(bid) { return (bid, url) }
         }
@@ -84,6 +91,24 @@ enum AppContainerLocator {
             if let url = locateViaMetadata(bid) { return (bid, url) }
         }
         return nil
+    }
+
+    static func containerLooksPopulated(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        for rel in ["Documents/Aweme.db", "Documents/mmkv", "Documents/_ttinstall_document", "Library/Preferences"] {
+            let p = url.appendingPathComponent(rel).path
+            if fm.fileExists(atPath: p) {
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: p, isDirectory: &isDir) {
+                    if isDir.boolValue {
+                        if let kids = try? fm.contentsOfDirectory(atPath: p), !kids.isEmpty { return true }
+                    } else {
+                        return true
+                    }
+                }
+            }
+        }
+        return false
     }
 
     static func locateViaProxy(_ bundleID: String) -> URL? {

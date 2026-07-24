@@ -12,6 +12,8 @@ final class SlimCleaner: @unchecked Sendable {
         var extraBytes: Int64 = 0
         var totalBytes: Int64 = 0
         var keepBytes: Int64 = 0
+        /// 扫描到的相对路径（随机新增缓存参考）
+        var relativePaths: [String] = []
         var error: String?
     }
 
@@ -31,25 +33,20 @@ final class SlimCleaner: @unchecked Sendable {
 
     static let awemeBundleID = "com.ss.iphone.ugc.Aweme"
 
-    private static let protectedNames: Set<String> = [
+    static let protectedNames: Set<String> = [
         ".com.apple.mobile_container_manager.metadata.plist"
     ]
 
-    /// Documents 下整夹保留（截图精简结构 + 参考包目录）；其中 _ttinstall_document 内文件一律不删
+    /// Documents 下整夹保留 —— 对齐 H9-20 可用备份包（功能正常的精简集）
     static let documentsKeepFolders: [String] = [
-        "Documents/_bdticketguard_document",
         "Documents/_ttinstall_document",
-        "Documents/AWEPublishedImages",
         "Documents/com.bytedance.ies",
-        "Documents/com.bytedance.ies-effects-cache",
         "Documents/FeedbackRecorder",
         "Documents/IESPlayTimePredictModel",
-        "Documents/mmkv",
-        "Documents/StudioAudit",
-        "Documents/TTAdSplashSimpleCache"
+        "Documents/mmkv"
     ]
 
-    /// Documents 根目录需保留的文件
+    /// Documents 根目录需保留的文件（同上备份包）
     static let documentsKeepFiles: Set<String> = [
         "Documents/Aweme.db",
         "Documents/Aweme.db-backup",
@@ -62,26 +59,33 @@ final class SlimCleaner: @unchecked Sendable {
         "Documents/server.json",
         "Documents/tt_net_config.config",
         "Documents/ttaccount_token_guard_data.archiver",
-        "Documents/ttaccountSDKUserInfo.archiver"
+        "Documents/ttaccountSDKUserInfo.archiver",
+        "Documents/uni_comm_cache.plist"
     ]
 
-    /// 移机/粘贴相关：整夹保留
+    /// Library 保留 —— 对齐 H9-20：账号态 / IM / gurd 资源 / 偏好
     static let libraryKeepFolders: [String] = [
+        "Library/AWEStorage",                          // UnifyStorage 登录与业务库（最大头）
+        "Library/AWEIMRoot",                           // 私信贴纸/用户
+        "Library/Application Support/gurd_cache",      // 只留 gurd，不整夹 Application Support
+        "Library/HTTPStorages",
         "Library/Preferences",
         "Library/SyncedPreferences"
     ]
 
-    /// 抖音商城 + 搜索：强制整夹保留（比精简包更宽，保证商城可用）
+    static let libraryKeepFiles: Set<String> = [
+        "Library/loginData.dat"
+    ]
+
+    /// tmp 里备份包常见的模型包（开屏/广告预测），体积小可留
+    static let tmpKeepFolders: [String] = [
+        "tmp/unisus"
+    ]
+
+    /// 商城/搜索：按 H9 实测收窄 —— 不再整留 WebKit/Cookies/Pitaya/整份 Application Support
+    /// gurd_cache + mmkv + ies 已足够；其余靠路径关键字兜底
     static let mallSearchKeepFolders: [String] = [
-        "Library/Pitaya",                 // 商城/搜索前端包、策略模型
-        "Library/WebKit",                 // 商城 H5 / 搜索 WebView
-        "Library/BDXBridgeAuthConfig",    // 杂交/Lynx 桥鉴权
-        "Library/AWEFileKit",             // 资源通道元数据
-        "Library/Application Support",    // gurd：ecommerce / gecko / morphling_ecom / lynx
-        "Library/HTTPStorages",
-        "Library/Cookies",
-        "Library/Preferences",
-        "Library/SyncedPreferences",
+        "Library/Application Support/gurd_cache",
         "Documents/mmkv",
         "Documents/com.bytedance.ies",
         "Documents/_ttinstall_document"
@@ -113,6 +117,7 @@ final class SlimCleaner: @unchecked Sendable {
         dirs.formUnion(documentsKeepFolders)
         dirs.formUnion(libraryKeepFolders)
         dirs.formUnion(mallSearchKeepFolders)
+        dirs.formUnion(tmpKeepFolders)
         for p in keepList {
             let parts = p.split(separator: "/").map(String.init)
             guard parts.count >= 2 else { continue }
@@ -122,7 +127,12 @@ final class SlimCleaner: @unchecked Sendable {
             if parts.count == 2, root == "Documents", documentsKeepFiles.contains(p) {
                 continue
             }
-            if parts.count == 2, root == "Library", p.hasSuffix(".dat") {
+            if parts.count == 2, root == "Library", libraryKeepFiles.contains(p) {
+                continue
+            }
+            // Library/Application Support/gurd_cache 保留三级
+            if root == "Library", parts.count >= 3, parts[1] == "Application Support" {
+                dirs.insert("Library/Application Support/" + parts[2])
                 continue
             }
             dirs.insert(root + "/" + parts[1])
@@ -139,26 +149,18 @@ final class SlimCleaner: @unchecked Sendable {
             }
         }
         let lower = rel.lowercased()
-        // Caches 不全留，只留商城/搜索必要子树
-        if lower.hasPrefix("library/caches/aweecom") { return true }
-        if lower.hasPrefix("library/caches/webkit") { return true }
-        if lower.contains("/ecommerce") || lower.contains("ecommerce_") { return true }
-        if lower.contains("morphling_ecom") { return true }
-        if lower.contains("gecko_core") || lower.contains("/gecko/") { return true }
+        // 仅在 gurd_cache / mmkv 内按商城关键字兜底，避免再整留 Caches/WebKit
+        let inGurdOrMmkv = lower.hasPrefix("library/application support/gurd_cache")
+            || lower.hasPrefix("documents/mmkv")
+        guard inGurdOrMmkv else { return false }
+        if lower.contains("ecommerce") || lower.contains("morphling_ecom") { return true }
+        if lower.contains("gecko") || lower.contains("lynx") || lower.contains("annie") { return true }
         if lower.contains("ecom_search")
             || lower.contains("aweme_ecom_search")
             || lower.contains("general_search")
             || lower.contains("mall_search")
             || lower.contains("ecom_mall") {
             return true
-        }
-        if lower.contains("/lynx") || lower.contains("lynx-") || lower.contains("annie") {
-            // 仅限商城资源相关根目录，避免误留无关临时文件
-            if lower.hasPrefix("library/application support/")
-                || lower.hasPrefix("library/pitaya/")
-                || lower.hasPrefix("library/caches/") {
-                return true
-            }
         }
         return false
     }
@@ -194,9 +196,17 @@ final class SlimCleaner: @unchecked Sendable {
                 return true
             }
         }
-        // 2) Documents 根文件
+        // 2) Documents / Library 根文件
         if Self.documentsKeepFiles.contains(rel) {
             return true
+        }
+        if Self.libraryKeepFiles.contains(rel) {
+            return true
+        }
+        // tmp 模型包文件名前缀（备份包里有）
+        if rel.hasPrefix("tmp/") {
+            let name = (rel as NSString).lastPathComponent.lowercased()
+            if name.hasPrefix("d_ios_") || name.hasPrefix("har_mlsdk") { return true }
         }
         // 3) 白名单精确路径
         if keepList.contains(rel) {
@@ -210,6 +220,8 @@ final class SlimCleaner: @unchecked Sendable {
         Set(documentsKeepFolders)
             .union(documentsKeepFiles)
             .union(libraryKeepFolders)
+            .union(libraryKeepFiles)
+            .union(tmpKeepFolders)
             .union(mallSearchKeepFolders)
     }
 
@@ -219,9 +231,50 @@ final class SlimCleaner: @unchecked Sendable {
     }
 
     func locateAwemeContainer() -> URL? {
-        if let url = locateViaApplicationProxy() { return url }
+        // 半刷新后系统可能指向「空新容器」，真数据还在孤儿目录。
+        // 优先返回带抖音数据指纹的目录，再退回系统 proxy。
+        if let url = locateViaMarkers(), containerLooksPopulated(url) { return url }
+        if let url = locateViaContainerMetadata(), containerLooksPopulated(url) { return url }
+        if let url = locateViaApplicationProxy(), containerLooksPopulated(url) { return url }
+        if let url = locateViaMarkers() { return url }
         if let url = locateViaContainerMetadata() { return url }
-        return locateViaMarkers()
+        return locateViaApplicationProxy()
+    }
+
+    /// Documents 里有 mmkv / Aweme.db / 非空 Library 才算「有数据」
+    private func containerLooksPopulated(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        let markers = [
+            "Documents/Aweme.db",
+            "Documents/mmkv",
+            "Documents/_ttinstall_document",
+            "Library/Preferences",
+            "Library/Caches"
+        ]
+        for rel in markers {
+            let p = url.appendingPathComponent(rel)
+            if fm.fileExists(atPath: p.path) {
+                if let kids = try? fm.contentsOfDirectory(atPath: p.path), !kids.isEmpty { return true }
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: p.path, isDirectory: &isDir), !isDir.boolValue {
+                    return true
+                }
+            }
+        }
+        // 目录总大小粗判
+        if let enumr = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) {
+            var total: Int64 = 0
+            var n = 0
+            for case let f as URL in enumr {
+                n += 1
+                if n > 80 { return true }
+                if let v = try? f.resourceValues(forKeys: [.fileSizeKey]), let sz = v.fileSize {
+                    total += Int64(sz)
+                    if total > 256_000 { return true }
+                }
+            }
+        }
+        return false
     }
 
     /// Same SPI the toolbox uses: LSApplicationProxy.dataContainerURL
@@ -301,11 +354,29 @@ final class SlimCleaner: @unchecked Sendable {
             result.error = "未找到抖音数据容器（须用巨魔安装本软件，且手机已安装抖音）"
             return result
         }
-        result.container = container
+        // 若系统指向空壳、真数据在孤儿目录：尝试把 MCM 指回有数据的目录
+        if !containerLooksPopulated(container),
+           let fat = locateViaMarkers() ?? locateViaContainerMetadata(),
+           containerLooksPopulated(fat),
+           fat.path != container.path {
+            _ = DouyinOneTapReset.relinkContainerIfPossible(
+                bundleID: Self.awemeBundleID,
+                fromEmpty: container,
+                toFat: fat
+            )
+            if let fixed = locateAwemeContainer(), containerLooksPopulated(fixed) {
+                result.container = fixed
+            } else {
+                result.container = fat
+            }
+        } else {
+            result.container = container
+        }
 
+        let scanRoot = result.container ?? container
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
-            at: container,
+            at: scanRoot,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isDirectoryKey],
             options: [],
             errorHandler: { _, _ in true }
@@ -314,7 +385,7 @@ final class SlimCleaner: @unchecked Sendable {
             return result
         }
 
-        let containerPath = container.standardizedFileURL.path
+        let containerPath = scanRoot.standardizedFileURL.path
         while let item = enumerator.nextObject() as? URL {
             let values = try? item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
             if values?.isDirectory == true { continue }
@@ -329,6 +400,7 @@ final class SlimCleaner: @unchecked Sendable {
             result.total += 1
             let size = Int64(values?.fileSize ?? 0)
             result.totalBytes += size
+            result.relativePaths.append(rel)
             if shouldKeep(relativePath: rel) {
                 result.keepHits += 1
                 result.keepBytes += size
