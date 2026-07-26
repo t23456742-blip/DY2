@@ -83,19 +83,22 @@ enum DouyinAccountQuery {
         snap.douyinID = uid ?? "—"
         snap.nickname = nonEmpty(raw.nickname) ?? "—"
         snap.deviceModel = friendlyDeviceName(nonEmpty(raw.deviceType) ?? "—")
+        // UA 兜底：至少显示 iPhone + 系统版本
+        if snap.deviceModel == "—" {
+            snap.deviceModel = uaFallbackModel(raw: raw)
+        }
         snap.osVersion = nonEmpty(raw.osVersion) ?? "—"
         snap.appVersion = nonEmpty(raw.appVersion) ?? "—"
         snap.registerTime = formatRegisterToMinute(raw.registerTimeRaw)
         snap.country = detectCountry(mobile: raw.mobile, fallbackUID: uid)
 
-        // 1) 直连 iesdouyin 查状态/昵称（无代理）
+        // 1) 直连 iesdouyin 查状态/昵称（无代理；对齐桌面 Windows UA）
         if let uid, !uid.isEmpty {
-            let api = queryUserInfoNoProxy(uniqueID: uid)
+            let api = queryUserInfoNoProxy(uniqueID: uid, secUID: raw.secUID, token: raw.token)
             if !api.status.isEmpty { snap.status = api.status }
             if snap.nickname == "—" || snap.nickname.isEmpty, let n = api.nickname, !n.isEmpty {
                 snap.nickname = n
             }
-            // API create_time 补注册时间（精确到分）
             if snap.registerTime == "—", let ct = api.createTimeMinute {
                 snap.registerTime = ct
             }
@@ -104,11 +107,17 @@ enum DouyinAccountQuery {
             snap.status = FileManager.default.fileExists(atPath: pref.path) ? "plist无unique_id" : "无抖音号"
         }
 
-        // 2) 直连钱包接口查是否在线（无代理）
+        // 2) 钱包接口查是否在线（对齐桌面 check_token_online）
         snap.online = checkOnlineNoProxy(raw: raw)
 
         snap.ok = snap.douyinID != "—" || snap.nickname != "—"
+        let missing: [String] = [
+            raw.deviceType == nil ? "device_type" : nil,
+            raw.token == nil ? "token" : nil,
+            raw.deviceID == nil ? "did" : nil
+        ].compactMap { $0 }
         snap.detail = "本机容器提参 + 直连查询（无代理）\n\(container.path)"
+            + (missing.isEmpty ? "" : "\n缺字段：\(missing.joined(separator: ","))")
         return snap
     }
 
@@ -165,39 +174,24 @@ enum DouyinAccountQuery {
     }
 
     private static func loadFromTTNetConfig(_ container: URL, into raw: inout Raw) {
-        let candidates = [
-            container.appendingPathComponent("Documents/tt_net_config.config"),
-            container.appendingPathComponent("Library/Preferences/tt_net_config.config"),
-            container.appendingPathComponent("tmp/tt_net_config.config")
-        ]
-        let fm = FileManager.default
-        for url in candidates where fm.fileExists(atPath: url.path) {
-            guard let data = try? Data(contentsOf: url) else { continue }
-            let cfg = parseTTNetConfig(data)
-            if raw.deviceID == nil { raw.deviceID = cfg["device_id"] ?? cfg["did"] }
-            if raw.installID == nil { raw.installID = cfg["install_id"] ?? cfg["iid"] }
-            if raw.cdid == nil { raw.cdid = cfg["cdid"] }
-            if raw.deviceType == nil { raw.deviceType = cfg["device_type"] }
-            if raw.osVersion == nil { raw.osVersion = cfg["os_version"] }
-            if raw.appVersion == nil {
-                raw.appVersion = cfg["version_code"] ?? cfg["app_version"]
-            }
-            if raw.buildNumber == nil { raw.buildNumber = cfg["build_number"] }
-            if raw.mccMnc == nil { raw.mccMnc = cfg["mcc_mnc"] }
-            if raw.screenWidth == nil { raw.screenWidth = cfg["screen_width"] }
-            if raw.osAPI == nil { raw.osAPI = cfg["os_api"] }
-            if raw.ac == nil { raw.ac = cfg["ac"] }
-            if raw.token == nil || raw.token?.isEmpty == true {
-                let t = cfg["ticket"] ?? cfg["x-tt-token"]
-                if let t, !t.isEmpty { raw.token = t }
-            }
-            // nested keys
-            for (k, v) in cfg {
-                if k.hasSuffix("device_type"), raw.deviceType == nil { raw.deviceType = v }
-                if k.hasSuffix("os_version"), raw.osVersion == nil { raw.osVersion = v }
-                if k.hasSuffix("version_code"), raw.appVersion == nil { raw.appVersion = v }
-            }
-            break
+        let cfg = AwemeTTNetConfig.load(fromContainer: container)
+        guard !cfg.isEmpty else { return }
+        if raw.deviceID == nil { raw.deviceID = cfg["device_id"] ?? cfg["did"] }
+        if raw.installID == nil { raw.installID = cfg["install_id"] ?? cfg["iid"] }
+        if raw.cdid == nil { raw.cdid = cfg["cdid"] }
+        if raw.deviceType == nil { raw.deviceType = cfg["device_type"] }
+        if raw.osVersion == nil { raw.osVersion = cfg["os_version"] }
+        if raw.appVersion == nil {
+            raw.appVersion = cfg["version_code"] ?? cfg["app_version"]
+        }
+        if raw.buildNumber == nil { raw.buildNumber = cfg["build_number"] }
+        if raw.mccMnc == nil { raw.mccMnc = cfg["mcc_mnc"] }
+        if raw.screenWidth == nil { raw.screenWidth = cfg["screen_width"] }
+        if raw.osAPI == nil { raw.osAPI = cfg["os_api"] }
+        if raw.ac == nil { raw.ac = cfg["ac"] }
+        if raw.token == nil || raw.token?.isEmpty == true {
+            let t = cfg["ticket"] ?? cfg["x-tt-token"]
+            if let t, !t.isEmpty { raw.token = t }
         }
     }
 
@@ -212,43 +206,6 @@ enum DouyinAccountQuery {
         }
     }
 
-    private static func parseTTNetConfig(_ data: Data) -> [String: String] {
-        var cfg: [String: String] = [:]
-        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            flattenJSON(obj, prefix: "", into: &cfg)
-            return cfg
-        }
-        if let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] {
-            flattenJSON(obj, prefix: "", into: &cfg)
-            return cfg
-        }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        for line in text.split(whereSeparator: \.isNewline) {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard let eq = s.firstIndex(of: "=") else { continue }
-            let k = String(s[..<eq]).trimmingCharacters(in: .whitespaces)
-            var v = String(s[s.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
-            v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            if !k.isEmpty { cfg[k] = v }
-        }
-        return cfg
-    }
-
-    private static func flattenJSON(_ obj: [String: Any], prefix: String, into cfg: inout [String: String]) {
-        for (k, v) in obj {
-            let fk = prefix.isEmpty ? k : "\(prefix)_\(k)"
-            if let d = v as? [String: Any] {
-                flattenJSON(d, prefix: fk, into: &cfg)
-            } else if let s = v as? String {
-                cfg[fk] = s
-                cfg[k] = s
-            } else if let n = v as? NSNumber {
-                cfg[fk] = n.stringValue
-                cfg[k] = n.stringValue
-            }
-        }
-    }
-
     // MARK: - API（无代理）
 
     private struct APIUser {
@@ -257,7 +214,22 @@ enum DouyinAccountQuery {
         var createTimeMinute: String?
     }
 
-    private static func queryUserInfoNoProxy(uniqueID: String) -> APIUser {
+    /// 对齐桌面 douyin_panel：iesdouyin unique_id；失败再用 sec_uid+token 兜底
+    private static func queryUserInfoNoProxy(uniqueID: String, secUID: String?, token: String?) -> APIUser {
+        var out = queryIesDouyin(uniqueID: uniqueID)
+        if out.status == "正常" || out.status == "封禁" || out.status == "违规"
+            || out.status == "禁言" || out.status == "私密" || out.status == "参数非法" {
+            return out
+        }
+        // 直连被拦 / 非 JSON → 用已登录 token + sec_uid 再查
+        if let sec = nonEmpty(secUID), let tok = nonEmpty(token) {
+            let alt = queryProfileBySecUID(secUID: sec, token: tok)
+            if !alt.status.isEmpty { return alt }
+        }
+        return out.status.isEmpty ? APIUser(status: "查询失败") : out
+    }
+
+    private static func queryIesDouyin(uniqueID: String) -> APIUser {
         var out = APIUser()
         let enc = uniqueID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? uniqueID
         guard let url = URL(string: "https://www.iesdouyin.com/web/api/v2/user/info/?unique_id=\(enc)") else {
@@ -265,29 +237,84 @@ enum DouyinAccountQuery {
             return out
         }
         var req = URLRequest(url: url, timeoutInterval: 15)
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
+        // 桌面面板用 Windows Chrome UA；iPhone UA 更容易被拦成非 JSON
+        req.setValue(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent"
+        )
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         req.setValue("https://www.iesdouyin.com/", forHTTPHeaderField: "Referer")
+        req.setValue("close", forHTTPHeaderField: "Connection")
 
         let cfg = URLSessionConfiguration.ephemeral
-        cfg.connectionProxyDictionary = [:] // 明确禁用系统代理
+        cfg.connectionProxyDictionary = [:]
         cfg.timeoutIntervalForRequest = 15
         let session = URLSession(configuration: cfg)
         let sem = DispatchSemaphore(value: 0)
-        session.dataTask(with: req) { data, _, err in
+        session.dataTask(with: req) { data, resp, err in
             defer { sem.signal() }
             if err != nil {
                 out.status = "查询失败"
                 return
             }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
-                out.status = "查询失败"
+                out.status = code == 0 ? "查询失败" : "接口拦截(\(code))"
+                return
+            }
+            let sc = (json["status_code"] as? NSNumber)?.intValue
+                ?? (json["status_code"] as? Int)
+                ?? -1
+            if sc == 5 {
+                out.status = "参数非法"
+                return
+            }
+            if sc != 0 {
+                // 桌面遇非0非5会换代理重试；手机无代理时标明原因
+                out.status = "接口拦截(sc=\(sc))"
                 return
             }
             let user = (json["user_info"] as? [String: Any])
+                ?? (json["user"] as? [String: Any])
                 ?? ((json["data"] as? [String: Any])?["user_info"] as? [String: Any])
+                ?? [:]
+            out = parseUserStatus(user)
+        }.resume()
+        _ = sem.wait(timeout: .now() + 16)
+        return out
+    }
+
+    private static func queryProfileBySecUID(secUID: String, token: String) -> APIUser {
+        var out = APIUser()
+        let enc = secUID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? secUID
+        guard let url = URL(string: "https://www.iesdouyin.com/aweme/v1/web/user/profile/other/?sec_user_id=\(enc)") else {
+            return out
+        }
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.setValue(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            forHTTPHeaderField: "User-Agent"
+        )
+        req.setValue(token, forHTTPHeaderField: "x-tt-token")
+        req.setValue("https://www.iesdouyin.com/", forHTTPHeaderField: "Referer")
+
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.connectionProxyDictionary = [:]
+        cfg.timeoutIntervalForRequest = 15
+        let session = URLSession(configuration: cfg)
+        let sem = DispatchSemaphore(value: 0)
+        session.dataTask(with: req) { data, _, _ in
+            defer { sem.signal() }
+            guard let data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            let sc = (json["status_code"] as? NSNumber)?.intValue ?? (json["status_code"] as? Int) ?? -1
+            guard sc == 0 else { return }
+            let user = (json["user"] as? [String: Any])
+                ?? ((json["data"] as? [String: Any])?["user"] as? [String: Any])
+                ?? (json["user_info"] as? [String: Any])
                 ?? [:]
             out = parseUserStatus(user)
         }.resume()
@@ -356,6 +383,7 @@ enum DouyinAccountQuery {
         let did = raw.deviceID ?? ""
         let iid = raw.installID ?? ""
         let cdid = raw.cdid ?? ""
+        // 对齐桌面：缺省用兜底机型，避免空参直接被拒
         let deviceType = raw.deviceType ?? "iPhone10,6"
         let osVersion = raw.osVersion ?? "16.0"
         let appVersion = raw.appVersion ?? "23.9.0"
@@ -363,6 +391,8 @@ enum DouyinAccountQuery {
 
         var comps = URLComponents(string: "https://webcast5-normal-c-lf.amemv.com/webcast/wallet_api/mobile/plan/")
         comps?.queryItems = [
+            URLQueryItem(name: "appTheme", value: "light"),
+            URLQueryItem(name: "need_personal_recommend", value: "1"),
             URLQueryItem(name: "version_code", value: appVersion),
             URLQueryItem(name: "app_version", value: appVersion),
             URLQueryItem(name: "device_id", value: did),
@@ -378,14 +408,19 @@ enum DouyinAccountQuery {
             URLQueryItem(name: "app_name", value: "aweme"),
             URLQueryItem(name: "channel", value: "App Store"),
             URLQueryItem(name: "aid", value: "1128"),
+            URLQueryItem(name: "minor_status", value: "0"),
             URLQueryItem(name: "package", value: "com.ss.iphone.ugc.Aweme"),
-            URLQueryItem(name: "device_platform", value: "iphone")
+            URLQueryItem(name: "device_platform", value: "iphone"),
+            URLQueryItem(name: "is_vcd", value: "1"),
+            URLQueryItem(name: "is_guest_mode", value: "0")
         ].filter { !($0.value ?? "").isEmpty }
 
         guard let url = comps?.url else { return "无法检测" }
         var req = URLRequest(url: url, timeoutInterval: 15)
         req.setValue(token, forHTTPHeaderField: "X-Tt-Token")
+        req.setValue("3.1.0", forHTTPHeaderField: "X-Vc-Bdturing-Sdk-Version")
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.setValue("2", forHTTPHeaderField: "Sdk-Version")
         req.setValue(
             "Aweme \(appVersion) rv:\(build) (iPhone; iOS \(osVersion); zh_CN) Cronet",
             forHTTPHeaderField: "User-Agent"
@@ -400,10 +435,15 @@ enum DouyinAccountQuery {
         session.dataTask(with: req) { data, resp, _ in
             defer { sem.signal() }
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard code == 200, let data,
+            // 桌面：HTTP 200 → 看 fee；非 200 → 掉线；异常 → 无法检测
+            guard code == 200 else {
+                result = code == 0 ? "无法检测" : "否"
+                return
+            }
+            guard let data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
             else {
-                result = code == 0 ? "无法检测" : "否"
+                result = "是" // 与桌面一致：解析失败保守当在线
                 return
             }
             let fee = ((json["data"] as? [String: Any])?["fee"] as? [Any]) ?? []
@@ -411,6 +451,13 @@ enum DouyinAccountQuery {
         }.resume()
         _ = sem.wait(timeout: .now() + 16)
         return result
+    }
+
+    private static func uaFallbackModel(raw: Raw) -> String {
+        if let os = nonEmpty(raw.osVersion) {
+            return "iPhone（iOS \(os)）"
+        }
+        return "—"
     }
 
     // MARK: - Country / device / time
@@ -462,23 +509,39 @@ enum DouyinAccountQuery {
         return f.string(from: date)
     }
 
+    /// Apple 内部代号 → 市面简称（14 / 14P / 14PM…）
+    /// 注意：iPhone14,7 = 14，不是 14PM；14PM = iPhone15,3
     private static func friendlyDeviceName(_ code: String) -> String {
         let map: [String: String] = [
-            "iPhone8,1": "iPhone 6s", "iPhone8,2": "iPhone 6s Plus", "iPhone8,4": "iPhone SE",
-            "iPhone9,1": "iPhone 7", "iPhone9,3": "iPhone 7", "iPhone9,2": "iPhone 7 Plus", "iPhone9,4": "iPhone 7 Plus",
-            "iPhone10,1": "iPhone 8", "iPhone10,4": "iPhone 8", "iPhone10,2": "iPhone 8 Plus", "iPhone10,5": "iPhone 8 Plus",
-            "iPhone10,3": "iPhone X", "iPhone10,6": "iPhone X",
-            "iPhone11,2": "iPhone XS", "iPhone11,4": "iPhone XS Max", "iPhone11,6": "iPhone XS Max", "iPhone11,8": "iPhone XR",
-            "iPhone12,1": "iPhone 11", "iPhone12,3": "iPhone 11 Pro", "iPhone12,5": "iPhone 11 Pro Max", "iPhone12,8": "iPhone SE (2)",
-            "iPhone13,1": "iPhone 12 mini", "iPhone13,2": "iPhone 12", "iPhone13,3": "iPhone 12 Pro", "iPhone13,4": "iPhone 12 Pro Max",
-            "iPhone14,4": "iPhone 13 mini", "iPhone14,5": "iPhone 13", "iPhone14,2": "iPhone 13 Pro", "iPhone14,3": "iPhone 13 Pro Max",
-            "iPhone14,6": "iPhone SE (3)", "iPhone14,7": "iPhone 14", "iPhone14,8": "iPhone 14 Plus",
-            "iPhone15,2": "iPhone 14 Pro", "iPhone15,3": "iPhone 14 Pro Max",
-            "iPhone15,4": "iPhone 15", "iPhone15,5": "iPhone 15 Plus",
-            "iPhone16,1": "iPhone 15 Pro", "iPhone16,2": "iPhone 15 Pro Max",
-            "iPhone17,1": "iPhone 16 Pro", "iPhone17,2": "iPhone 16 Pro Max", "iPhone17,3": "iPhone 16", "iPhone17,4": "iPhone 16 Plus"
+            // SE / 早期
+            "iPhone8,1": "6s", "iPhone8,2": "6sP", "iPhone8,4": "SE1",
+            "iPhone9,1": "7", "iPhone9,3": "7", "iPhone9,2": "7P", "iPhone9,4": "7P",
+            "iPhone10,1": "8", "iPhone10,4": "8", "iPhone10,2": "8P", "iPhone10,5": "8P",
+            "iPhone10,3": "X", "iPhone10,6": "X",
+            "iPhone11,2": "XS", "iPhone11,4": "XSM", "iPhone11,6": "XSM", "iPhone11,8": "XR",
+            "iPhone12,1": "11", "iPhone12,3": "11P", "iPhone12,5": "11PM", "iPhone12,8": "SE2",
+            // 12
+            "iPhone13,1": "12mini", "iPhone13,2": "12", "iPhone13,3": "12P", "iPhone13,4": "12PM",
+            // 13（内部是 iPhone14,x）
+            "iPhone14,4": "13mini", "iPhone14,5": "13", "iPhone14,2": "13P", "iPhone14,3": "13PM",
+            "iPhone14,6": "SE3",
+            // 14（内部是 iPhone14,7/8 + iPhone15,2/3）
+            "iPhone14,7": "14", "iPhone14,8": "14Plus",
+            "iPhone15,2": "14P", "iPhone15,3": "14PM",
+            // 15
+            "iPhone15,4": "15", "iPhone15,5": "15Plus",
+            "iPhone16,1": "15P", "iPhone16,2": "15PM",
+            // 16
+            "iPhone17,3": "16", "iPhone17,4": "16Plus",
+            "iPhone17,1": "16P", "iPhone17,2": "16PM",
+            "iPhone17,5": "16e",
+            // 17 / Air
+            "iPhone18,3": "17", "iPhone18,1": "17P", "iPhone18,2": "17PM",
+            "iPhone18,4": "Air"
         ]
-        if let name = map[code] { return "\(name)（\(code)）" }
+        if let short = map[code] {
+            return "\(short)（\(code)）"
+        }
         return code
     }
 

@@ -76,20 +76,14 @@ enum DouyinParamExtractor {
     private static func extractParams(from container: URL) -> [String: String] {
         var params: [String: String] = [:]
 
-        // 1) tt_net_config.config → did / iid / cdid / sessionid
-        if let data = firstFileData(named: "tt_net_config.config", under: container) {
-            let cfg = parseTTNetConfig(data)
+        // 1) tt_net_config.config → did / iid / cdid / sessionid（含 session_url 机型参数）
+        let cfg = AwemeTTNetConfig.load(fromContainer: container)
+        if !cfg.isEmpty {
             setIfEmpty(&params, "did", cfg["device_id"] ?? cfg["did"])
             setIfEmpty(&params, "iid", cfg["install_id"] ?? cfg["iid"])
             setIfEmpty(&params, "cdid", cfg["cdid"])
             setIfEmpty(&params, "sessionid", cfg["sessionid"] ?? cfg["session_id"])
             setIfEmpty(&params, "x-tt-token", cfg["ticket"] ?? cfg["x-tt-token"])
-            for (k, v) in cfg {
-                if k.hasSuffix("device_id") { setIfEmpty(&params, "did", v) }
-                if k.hasSuffix("install_id") { setIfEmpty(&params, "iid", v) }
-                if k.hasSuffix("cdid") { setIfEmpty(&params, "cdid", v) }
-                if k.hasSuffix("sessionid") || k.hasSuffix("session_id") { setIfEmpty(&params, "sessionid", v) }
-            }
         }
 
         // 2) Cookies.binarycookies
@@ -361,43 +355,6 @@ enum DouyinParamExtractor {
 
     private static func merge(_ src: [String: String], into dest: inout [String: String]) {
         for (k, v) in src { setIfEmpty(&dest, k, v) }
-    }
-
-    private static func parseTTNetConfig(_ data: Data) -> [String: String] {
-        var cfg: [String: String] = [:]
-        if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            flattenJSON(obj, prefix: "", into: &cfg)
-            return cfg
-        }
-        if let obj = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any] {
-            flattenJSON(obj, prefix: "", into: &cfg)
-            return cfg
-        }
-        let text = String(data: data, encoding: .utf8) ?? ""
-        for line in text.split(whereSeparator: \.isNewline) {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard let eq = s.firstIndex(of: "=") else { continue }
-            let k = String(s[..<eq]).trimmingCharacters(in: .whitespaces)
-            var v = String(s[s.index(after: eq)...]).trimmingCharacters(in: .whitespaces)
-            v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-            if !k.isEmpty { cfg[k] = v }
-        }
-        return cfg
-    }
-
-    private static func flattenJSON(_ obj: [String: Any], prefix: String, into cfg: inout [String: String]) {
-        for (k, v) in obj {
-            let fk = prefix.isEmpty ? k : "\(prefix)_\(k)"
-            if let d = v as? [String: Any] {
-                flattenJSON(d, prefix: fk, into: &cfg)
-            } else if let s = v as? String {
-                cfg[fk] = s
-                cfg[k] = s
-            } else if let n = v as? NSNumber {
-                cfg[fk] = n.stringValue
-                cfg[k] = n.stringValue
-            }
-        }
     }
 
     /// 在容器内按文件名浅搜（Documents / Library / mmkv）
