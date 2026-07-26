@@ -13,6 +13,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Locate project.yml
+        id: root
+        run: |
+          set -euo pipefail
+          echo "Workspace layout:"
+          ls -la
+          if [ -f project.yml ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+            echo "Found project.yml at repo root"
+          elif [ -f DYSlimClean/project.yml ]; then
+            echo "dir=DYSlimClean" >> "$GITHUB_OUTPUT"
+            echo "Found project.yml under DYSlimClean/"
+          else
+            echo "ERROR: project.yml not found at ./ or ./DYSlimClean/"
+            find . -maxdepth 3 -name 'project.yml' -print || true
+            exit 1
+          fi
+
       - name: Select Xcode 16
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -27,11 +45,13 @@ jobs:
           xcodegen --version
 
       - name: Generate Xcode project
+        working-directory: ${{ steps.root.outputs.dir }}
         run: |
           test -f project.yml
           xcodegen generate
 
       - name: Build (unsigned)
+        working-directory: ${{ steps.root.outputs.dir }}
         run: |
           xcodebuild \
             -project DYSlimClean.xcodeproj \
@@ -42,9 +62,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION=14.3 \
+            CURRENT_PROJECT_VERSION=143 \
             build
 
       - name: Package tipa
+        working-directory: ${{ steps.root.outputs.dir }}
+        env:
+          MARKETING_VERSION: "14.3"
+          CURRENT_PROJECT_VERSION: "143"
         run: |
           sed -i '' $'s/\r$//' scripts/package-tipa.sh
           chmod +x scripts/package-tipa.sh
@@ -55,6 +81,6 @@ jobs:
         with:
           name: DYSlimClean-tipa
           path: |
-            dist/*.tipa
-            dist/*.ipa
+            ${{ steps.root.outputs.dir }}/dist/*.tipa
+            ${{ steps.root.outputs.dir }}/dist/*.ipa
           if-no-files-found: error
