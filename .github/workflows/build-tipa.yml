@@ -19,14 +19,15 @@ jobs:
           set -euo pipefail
           echo "Workspace layout:"
           ls -la
-          if [ -f project.yml ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-            echo "Found project.yml at repo root"
-          elif [ -f DYSlimClean/project.yml ]; then
+          # 优先用 DYSlimClean/（网页整包上传位置），避免根目录残留 Resources 造成重复打包
+          if [ -f DYSlimClean/project.yml ]; then
             echo "dir=DYSlimClean" >> "$GITHUB_OUTPUT"
-            echo "Found project.yml under DYSlimClean/"
+            echo "Using DYSlimClean/project.yml"
+          elif [ -f project.yml ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+            echo "Using ./project.yml"
           else
-            echo "ERROR: project.yml not found at ./ or ./DYSlimClean/"
+            echo "ERROR: project.yml not found at ./DYSlimClean/ or ./"
             find . -maxdepth 3 -name 'project.yml' -print || true
             exit 1
           fi
@@ -47,7 +48,16 @@ jobs:
       - name: Generate Xcode project
         working-directory: ${{ steps.root.outputs.dir }}
         run: |
+          set -euo pipefail
           test -f project.yml
+          echo "Generate in: $(pwd)"
+          ls -la
+          # 防止同目录下又套一层 DYSlimClean/Resources 导致 duplicate Info.plist
+          if [ -d Resources ] && [ -d DYSlimClean/Resources ]; then
+            echo "WARN: both Resources/ and DYSlimClean/Resources/ exist — removing nested DYSlimClean/ to avoid duplicate copy"
+            rm -rf DYSlimClean
+          fi
+          rm -rf DYSlimClean.xcodeproj build dist
           xcodegen generate
 
       - name: Build (unsigned)
@@ -58,6 +68,7 @@ jobs:
             -scheme DYSlimClean \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
