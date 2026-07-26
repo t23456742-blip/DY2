@@ -47,7 +47,7 @@ struct AppIdentityDetailView: View {
             Section {
                 actionRow(
                     title: "刷新容器",
-                    current: "当前 UUID：\(identity.containerText)",
+                    current: "当前 UUID：\(identity.containerText)\n（改 metadata.plist / MCM，不是 IDFV）",
                     color: accent
                 ) {
                     cleanModel.runIdentityAction(.container, app: app, allFour: false)
@@ -61,14 +61,14 @@ struct AppIdentityDetailView: View {
                 }
                 actionRow(
                     title: "刷新标识符",
-                    current: "当前 IDFV：\(identity.vendorText)",
+                    current: "当前 IDFV：\(identity.vendorText)\n（lsdidentifiers · Vendors，不是容器 metadata）",
                     color: Color(red: 0.35, green: 0.75, blue: 1.0)
                 ) {
                     cleanModel.runIdentityAction(.vendor, app: app, allFour: false)
                 }
                 actionRow(
                     title: "刷新广告符",
-                    current: "当前 IDFA：\(identity.advertiserText)",
+                    current: "当前 IDFA：\(identity.advertiserText)\n（lsdidentifiers · Advertisers）",
                     color: Color(red: 0.7, green: 0.45, blue: 1.0)
                 ) {
                     cleanModel.runIdentityAction(.advertiser, app: app, allFour: false)

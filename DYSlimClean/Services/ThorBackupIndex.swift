@@ -90,40 +90,52 @@ enum ThorBackupIndex {
         return out.sorted { $0.name > $1.name }
     }
 
-    /// 在备份包内找抖音数据根（含 Documents/mmkv 或 Aweme.plist）
+    /// 在备份包内找抖音数据根：`{backup}/com.ss.iphone.ugc.Aweme`（与本机 Application/UUID 容器同结构）
     static func findAwemeDataRoot(inBackup folderPath: String) -> URL? {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: folderPath, isDirectory: true)
         guard fm.fileExists(atPath: root.path) else { return nil }
 
-        // 常见：Backups/xxx/com.ss.iphone.ugc.Aweme/ 或直接是容器内容
-        let direct = [
+        // 雷神标准：Backups/2026-06-08-23-42-31-31/com.ss.iphone.ugc.Aweme/
+        let preferred = [
             root.appendingPathComponent("com.ss.iphone.ugc.Aweme"),
-            root.appendingPathComponent("Aweme"),
-            root
+            root.appendingPathComponent("com.ss.iphone.ugc.aweme")
         ]
-        for u in direct where looksLikeAwemeContainer(u) {
-            return u
+        for u in preferred {
+            if looksLikeAwemeContainer(u) || hasSandboxShape(u) {
+                return u
+            }
+        }
+
+        // 若备份根本身就是容器内容（Documents/Library/tmp）
+        if looksLikeAwemeContainer(root) || hasSandboxShape(root) {
+            return root
         }
 
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             return nil
         }
-        var budget = 4000
+        var budget = 6000
         while let u = en.nextObject() as? URL {
             budget -= 1
             if budget <= 0 { break }
-            if u.lastPathComponent.caseInsensitiveCompare("com.ss.iphone.ugc.Aweme") == .orderedSame,
-               looksLikeAwemeContainer(u) {
-                return u
+            let name = u.lastPathComponent
+            if name.caseInsensitiveCompare("com.ss.iphone.ugc.Aweme") == .orderedSame {
+                if looksLikeAwemeContainer(u) || hasSandboxShape(u) { return u }
             }
-            if u.lastPathComponent == "Aweme.db" || u.lastPathComponent == "com.ss.iphone.ugc.Aweme.plist" {
-                // 上溯到容器根：…/Documents/Aweme.db → …
+            if name == "Aweme.db" || name == "com.ss.iphone.ugc.Aweme.plist" {
                 let container = u.deletingLastPathComponent().deletingLastPathComponent()
-                if looksLikeAwemeContainer(container) { return container }
+                if looksLikeAwemeContainer(container) || hasSandboxShape(container) { return container }
             }
         }
         return nil
+    }
+
+    private static func hasSandboxShape(_ url: URL) -> Bool {
+        let fm = FileManager.default
+        let docs = url.appendingPathComponent("Documents").path
+        let lib = url.appendingPathComponent("Library").path
+        return fm.fileExists(atPath: docs) && fm.fileExists(atPath: lib)
     }
 
     private static func looksLikeAwemeContainer(_ url: URL) -> Bool {

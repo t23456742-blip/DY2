@@ -56,6 +56,8 @@ final class CleanViewModel: ObservableObject {
     @Published var thorBackups: [ThorBackupIndex.Entry] = []
     @Published var showThorExtractResult = false
     @Published var thorExtractText = ""
+    /// 查询结果来源说明（本机容器 / 雷神备份备注）
+    @Published var accountQuerySource = ""
     @Published var shellPath: String = UserDefaults.standard.string(forKey: "dyshell.path")
         ?? "/var/mobile/Media/dyclean.sh"
     @Published var showShellResult = false
@@ -101,12 +103,12 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "备份提参…"
-        log("雷神备份提参：\(entry.name)\n\(entry.folderPath)")
+        log("雷神备份提参：\(entry.name)\n\(entry.folderPath)/com.ss.iphone.ugc.Aweme")
         Task.detached(priority: .userInitiated) { [cleaner] in
             guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: entry.folderPath) else {
                 await MainActor.run {
                     self.isBusy = false
-                    self.thorExtractText = "备份包内未找到抖音数据\n备注：\(entry.name)\n\(entry.folderPath)"
+                    self.thorExtractText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n备注：\(entry.name)\n\(entry.folderPath)"
                     self.showThorExtractResult = true
                     self.log(self.thorExtractText)
                 }
@@ -115,11 +117,44 @@ final class CleanViewModel: ObservableObject {
             let r = DouyinParamExtractor.extractAndSave(cleaner: cleaner, container: root)
             await MainActor.run {
                 self.isBusy = false
-                self.thorExtractText = "备注：\(entry.name)\n\(r.message)"
+                self.thorExtractText = "备注：\(entry.name)\n来源：\(root.path)\n\(r.message)"
                 self.showThorExtractResult = true
                 self.paramExtractText = self.thorExtractText
                 self.showParamExtractResult = true
                 self.log(self.thorExtractText)
+            }
+        }
+    }
+
+    /// 雷神备份查询：解析 `{backup}/com.ss.iphone.ugc.Aweme`，结果写到上方「抖音查询」面板
+    func queryFromThorBackup(_ entry: ThorBackupIndex.Entry) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "备份查询…"
+        log("雷神备份查询：\(entry.name)\n\(entry.folderPath)/com.ss.iphone.ugc.Aweme")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: entry.folderPath) else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.accountQuerySource = "雷神·\(entry.name)（未找到 Aweme 目录）"
+                    self.accountQueryRows = [("来源", self.accountQuerySource), ("路径", entry.folderPath)]
+                    self.accountQueryText = "备份包内未找到 com.ss.iphone.ugc.Aweme"
+                    self.showAccountQueryResult = true
+                    self.log(self.accountQueryText)
+                }
+                return
+            }
+            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: root)
+            await MainActor.run {
+                self.isBusy = false
+                self.accountQuerySource = "雷神备份 · \(entry.name)\n\(root.path)"
+                var rows = [("来源", "雷神·\(entry.name)")]
+                rows.append(contentsOf: snap.rows)
+                self.accountQueryRows = rows
+                self.accountQueryText = "\(self.accountQuerySource)\n\n\(snap.message)"
+                self.showAccountQueryResult = true
+                self.log(self.accountQuerySource)
+                self.log(snap.message)
             }
         }
     }
@@ -533,6 +568,7 @@ final class CleanViewModel: ObservableObject {
                 if snap.douyinID != "—" {
                     self.containerFound = true
                 }
+                self.accountQuerySource = preferred?.path ?? snap.detail
                 if !self.containerFound {
                     self.log(cleaner.locateAwemeDiagnostics())
                 }
