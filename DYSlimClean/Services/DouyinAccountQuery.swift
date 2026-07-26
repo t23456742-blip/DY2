@@ -100,7 +100,8 @@ enum DouyinAccountQuery {
                 snap.registerTime = ct
             }
         } else {
-            snap.status = "无抖音号"
+            let pref = container.appendingPathComponent("Library/Preferences/com.ss.iphone.ugc.Aweme.plist")
+            snap.status = FileManager.default.fileExists(atPath: pref.path) ? "plist无unique_id" : "无抖音号"
         }
 
         // 2) 直连钱包接口查是否在线（无代理）
@@ -119,15 +120,16 @@ enum DouyinAccountQuery {
               let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any]
         else { return }
 
-        if let tok = root["bdaccount_session_x_tt_token"] as? String, !tok.isEmpty {
-            raw.token = tok
-        }
-        if let d = root["com.toutiao.account.userdefault.user"] as? Data {
-            parseUserArchive(d, into: &raw)
-        }
-        if let d = root["kDYACurrentLoginUserPersistenceKey"] as? Data {
-            parseProfileArchive(d, into: &raw)
-        }
+        // 对齐桌面 dy_plist：从同一份 Aweme.plist 抠 unique_id / 注册时间 / 手机号
+        let acct = AwemeKeyedArchive.loadAccount(fromRoot: root)
+        if raw.uniqueID == nil { raw.uniqueID = acct["unique_id"] ?? acct["抖音号"] }
+        if raw.shortID == nil { raw.shortID = acct["ShortID"] }
+        if raw.nickname == nil { raw.nickname = acct["nickname"] ?? acct["昵称"] }
+        if raw.userID == nil { raw.userID = acct["uid"] ?? acct["用户ID"] ?? acct["UserID"] }
+        if raw.mobile == nil { raw.mobile = acct["mobile"] ?? acct["手机号"] }
+        if raw.secUID == nil { raw.secUID = acct["secUserId"] ?? acct["SecUserID"] }
+        if raw.registerTimeRaw == nil { raw.registerTimeRaw = acct["register_time"] ?? acct["注册时间"] }
+        if raw.token == nil { raw.token = acct["x-tt-token"] }
 
         // base64 设备 JSON（常见于设备指纹缓存）
         for (_, v) in root {
@@ -244,33 +246,6 @@ enum DouyinAccountQuery {
                 cfg[fk] = n.stringValue
                 cfg[k] = n.stringValue
             }
-        }
-    }
-
-    private static func parseUserArchive(_ data: Data, into raw: inout Raw) {
-        guard let objs = keyedObjects(data) else { return }
-        for obj in objs {
-            guard let dict = obj as? [String: Any] else { continue }
-            let map = flattenNSDictionary(dict, objects: objs)
-            if raw.nickname == nil { raw.nickname = map["screenName"] ?? map["name"] }
-            if raw.userID == nil { raw.userID = map["userID"] }
-            if raw.mobile == nil { raw.mobile = map["mobile"] }
-            if raw.secUID == nil { raw.secUID = map["secUserId"] }
-        }
-    }
-
-    private static func parseProfileArchive(_ data: Data, into raw: inout Raw) {
-        guard let objs = keyedObjects(data) else { return }
-        for obj in objs {
-            guard let dict = obj as? [String: Any] else { continue }
-            let map = flattenNSDictionary(dict, objects: objs)
-            guard map["unique_id"] != nil || map["nickname"] != nil || map["uid"] != nil || map["register_time"] != nil else { continue }
-            if raw.uniqueID == nil { raw.uniqueID = map["unique_id"] }
-            if raw.shortID == nil { raw.shortID = map["short_id"] }
-            if raw.nickname == nil { raw.nickname = map["nickname"] }
-            if raw.userID == nil { raw.userID = map["uid"] }
-            if raw.registerTimeRaw == nil { raw.registerTimeRaw = map["register_time"] }
-            break
         }
     }
 
@@ -505,63 +480,6 @@ enum DouyinAccountQuery {
         ]
         if let name = map[code] { return "\(name)（\(code)）" }
         return code
-    }
-
-    // MARK: - Keyed archive helpers（与 DouyinAccountProbe 同思路）
-
-    private static func keyedObjects(_ data: Data) -> [Any]? {
-        guard data.count >= 8, data.prefix(8) == Data("bplist00".utf8) else { return nil }
-        guard let root = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let objs = root["$objects"] as? [Any] else { return nil }
-        return objs
-    }
-
-    private static func flattenNSDictionary(_ dict: [String: Any], objects: [Any]) -> [String: String] {
-        var out: [String: String] = [:]
-        if let keys = dict["NS.keys"] as? [Any], let vals = dict["NS.objects"] as? [Any] {
-            let n = min(keys.count, vals.count)
-            for i in 0..<n {
-                guard let ki = uidIndex(keys[i]), ki < objects.count,
-                      let key = objects[ki] as? String else { continue }
-                if let s = resolveString(vals[i], objects: objects) {
-                    out[key] = s
-                }
-            }
-            return out
-        }
-        for (k, v) in dict {
-            if k.hasPrefix("$") || k.hasPrefix("NS.") { continue }
-            if let s = v as? String {
-                out[k] = s
-            } else if let n = v as? NSNumber {
-                out[k] = n.stringValue
-            } else if let idx = uidIndex(v), idx < objects.count {
-                if let s = objects[idx] as? String { out[k] = s }
-                else if let n = objects[idx] as? NSNumber { out[k] = n.stringValue }
-            }
-        }
-        return out
-    }
-
-    private static func resolveString(_ any: Any, objects: [Any]) -> String? {
-        if let s = any as? String { return s }
-        if let n = any as? NSNumber { return n.stringValue }
-        if let idx = uidIndex(any), idx < objects.count {
-            if let s = objects[idx] as? String { return s }
-            if let n = objects[idx] as? NSNumber { return n.stringValue }
-        }
-        return nil
-    }
-
-    private static func uidIndex(_ any: Any) -> Int? {
-        let obj = any as AnyObject
-        if obj.responds(to: Selector(("UID"))) {
-            if let n = obj.value(forKey: "UID") as? NSNumber { return n.intValue }
-            if let u = obj.value(forKey: "UID") as? UInt32 { return Int(u) }
-            if let u = obj.value(forKey: "UID") as? Int { return u }
-        }
-        if let n = any as? NSNumber { return n.intValue }
-        return nil
     }
 
     private static func nonEmpty(_ s: String?) -> String? {

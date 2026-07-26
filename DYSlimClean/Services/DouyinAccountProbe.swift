@@ -186,91 +186,22 @@ enum DouyinAccountProbe {
     }
 
     private static func parseKeyedArchiveUser(_ data: Data, into info: inout AccountInfo) {
-        guard let inner = keyedObjects(data) else { return }
-        for obj in inner {
-            guard let dict = obj as? [String: Any] else { continue }
-            let map = flattenNSDictionary(dict, objects: inner)
-            if let v = map["screenName"] ?? map["name"], info.nickname == nil { info.nickname = v }
-            if let v = map["userID"], info.userID == nil { info.userID = v }
-            if let v = map["mobile"], info.mobile == nil { info.mobile = v }
-            if let v = map["secUserId"], info.secUID == nil { info.secUID = v }
-        }
+        let map = AwemeKeyedArchive.flattenAll(data)
+        if let v = map["screenName"] ?? map["name"], info.nickname == nil { info.nickname = v }
+        if let v = map["userID"] ?? map["userId"], info.userID == nil { info.userID = v }
+        if let v = map["mobile"], info.mobile == nil { info.mobile = v }
+        if let v = map["secUserId"], info.secUID == nil { info.secUID = v }
     }
 
     private static func parseKeyedArchiveProfile(_ data: Data, into info: inout AccountInfo) {
-        guard let inner = keyedObjects(data) else { return }
-        for obj in inner {
-            guard let dict = obj as? [String: Any] else { continue }
-            let map = flattenNSDictionary(dict, objects: inner)
-            guard map["unique_id"] != nil || map["nickname"] != nil || map["uid"] != nil else { continue }
-            if let v = map["unique_id"], info.uniqueID == nil { info.uniqueID = v }
-            if let v = map["short_id"], info.uniqueID == nil { info.uniqueID = v }
-            if let v = map["nickname"], info.nickname == nil { info.nickname = v }
-            if let v = map["uid"], info.userID == nil { info.userID = v }
-            if let v = map["register_time"] {
-                _ = v // 可选展示，先不占行
-            }
-            break
+        let map = AwemeKeyedArchive.flattenAll(data)
+        if let v = map["unique_id"], info.uniqueID == nil { info.uniqueID = v }
+        if let v = map["short_id"], info.uniqueID == nil, v != "0" { info.uniqueID = v }
+        if let v = map["nickname"], info.nickname == nil { info.nickname = v }
+        if let v = map["uid"], info.userID == nil { info.userID = v }
+        if info.uniqueID == nil, let scraped = AwemeKeyedArchive.scrapeField(data, key: "unique_id") {
+            info.uniqueID = scraped
         }
-    }
-
-    private static func keyedObjects(_ data: Data) -> [Any]? {
-        guard data.count >= 8, data.prefix(8) == Data("bplist00".utf8) else { return nil }
-        guard let root = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let objs = root["$objects"] as? [Any] else { return nil }
-        return objs
-    }
-
-    /// 把 NSKeyedArchiver 的 NS.keys/NS.objects 字典摊平
-    private static func flattenNSDictionary(_ dict: [String: Any], objects: [Any]) -> [String: String] {
-        var out: [String: String] = [:]
-        if let keys = dict["NS.keys"] as? [Any], let vals = dict["NS.objects"] as? [Any] {
-            let n = min(keys.count, vals.count)
-            for i in 0..<n {
-                guard let ki = uidIndex(keys[i]), ki < objects.count,
-                      let key = objects[ki] as? String else { continue }
-                let val = resolveValue(vals[i], objects: objects)
-                if let s = val as? String {
-                    out[key] = s
-                } else if let n = val as? NSNumber {
-                    out[key] = n.stringValue
-                }
-            }
-            return out
-        }
-        for (k, v) in dict {
-            if k.hasPrefix("$") || k.hasPrefix("NS.") { continue }
-            if let s = v as? String {
-                out[k] = s
-            } else if let idx = uidIndex(v), idx < objects.count, let s = objects[idx] as? String {
-                out[k] = s
-            }
-        }
-        return out
-    }
-
-    private static func resolveValue(_ any: Any, objects: [Any]) -> Any? {
-        if let s = any as? String { return s }
-        if let n = any as? NSNumber { return n }
-        if let idx = uidIndex(any), idx < objects.count {
-            let o = objects[idx]
-            if let s = o as? String { return s }
-            if let n = o as? NSNumber { return n }
-            return o
-        }
-        return nil
-    }
-
-    private static func uidIndex(_ any: Any) -> Int? {
-        let obj = any as AnyObject
-        if obj.responds(to: Selector(("UID"))) {
-            if let n = obj.value(forKey: "UID") as? NSNumber { return n.intValue }
-            if let u = obj.value(forKey: "UID") as? UInt32 { return Int(u) }
-            if let u = obj.value(forKey: "UID") as? Int { return u }
-        }
-        // 部分系统把 UID 暴露为整型
-        if let n = any as? NSNumber { return n.intValue }
-        return nil
     }
 
     // MARK: - Mall local

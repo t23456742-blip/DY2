@@ -37,7 +37,17 @@ enum DouyinParamExtractor {
         var params = extractParams(from: container)
         let douyinID = resolveDouyinID(container: container, params: &params)
         guard !douyinID.isEmpty else {
-            return Outcome(ok: false, message: "未读到抖音号，请先登录抖音", path: "", douyinID: "", filledCount: 0)
+            let pref = container.appendingPathComponent("Library/Preferences/com.ss.iphone.ugc.Aweme.plist").path
+            let exists = FileManager.default.fileExists(atPath: pref)
+            return Outcome(
+                ok: false,
+                message: exists
+                    ? "已找到 Aweme.plist，但未解析出 unique_id（与桌面 dy_plist 同文件）\n\(pref)"
+                    : "容器内无 Preferences/com.ss.iphone.ugc.Aweme.plist\n容器：\(container.path)",
+                path: "",
+                douyinID: "",
+                filledCount: countFilled(params)
+            )
         }
 
         let text = formatTXT(douyinID: douyinID, params: params)
@@ -137,20 +147,11 @@ enum DouyinParamExtractor {
     }
 
     private static func resolveDouyinID(container: URL, params: inout [String: String]) -> String {
-        let pref = container.appendingPathComponent("Library/Preferences/com.ss.iphone.ugc.Aweme.plist")
-        if let data = try? Data(contentsOf: pref),
-           let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] {
-            if let d = root["kDYACurrentLoginUserPersistenceKey"] as? Data,
-               let map = keyedFlatMap(d) {
-                if let u = map["unique_id"], !u.isEmpty, u != "0" { return u }
-                if let s = map["short_id"], !s.isEmpty, s != "0" { return s }
-                if let uid = map["uid"], !uid.isEmpty { return uid }
-            }
-            if let d = root["com.toutiao.account.userdefault.user"] as? Data,
-               let map = keyedFlatMap(d) {
-                if let id = map["userID"] ?? map["userId"], !id.isEmpty { return id }
-            }
-        }
+        // 对齐桌面 dy_plist：同一路径 Library/Preferences/com.ss.iphone.ugc.Aweme.plist
+        let acct = AwemeKeyedArchive.loadAccount(fromContainer: container)
+        if let u = acct["unique_id"] ?? acct["抖音号"], !u.isEmpty, u != "0" { return u }
+        if let s = acct["ShortID"], !s.isEmpty, s != "0" { return s }
+        if let uid = acct["uid"] ?? acct["用户ID"] ?? acct["UserID"], !uid.isEmpty { return uid }
         // multi_sids 前缀常为 uid
         if let ms = params["multi_sids"], let colon = ms.firstIndex(of: ":") {
             let uid = String(ms[..<colon])
@@ -397,53 +398,6 @@ enum DouyinParamExtractor {
                 cfg[k] = n.stringValue
             }
         }
-    }
-
-    private static func keyedFlatMap(_ data: Data) -> [String: String]? {
-        guard data.count >= 8, data.prefix(8) == Data("bplist00".utf8) else { return nil }
-        guard let root = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any],
-              let objs = root["$objects"] as? [Any] else { return nil }
-        var map: [String: String] = [:]
-        for obj in objs {
-            guard let dict = obj as? [String: Any] else { continue }
-            if let keys = dict["NS.keys"] as? [Any], let vals = dict["NS.objects"] as? [Any] {
-                let n = min(keys.count, vals.count)
-                for i in 0..<n {
-                    guard let ki = uidIndex(keys[i]), ki < objs.count,
-                          let key = objs[ki] as? String else { continue }
-                    if let s = resolveString(vals[i], objects: objs) {
-                        map[key] = s
-                    }
-                }
-            } else {
-                for (k, v) in dict {
-                    if k.hasPrefix("$") || k.hasPrefix("NS.") { continue }
-                    if let s = resolveString(v, objects: objs) { map[k] = s }
-                }
-            }
-        }
-        return map.isEmpty ? nil : map
-    }
-
-    private static func resolveString(_ any: Any, objects: [Any]) -> String? {
-        if let s = any as? String { return s }
-        if let n = any as? NSNumber { return n.stringValue }
-        if let idx = uidIndex(any), idx < objects.count {
-            if let s = objects[idx] as? String { return s }
-            if let n = objects[idx] as? NSNumber { return n.stringValue }
-        }
-        return nil
-    }
-
-    private static func uidIndex(_ any: Any) -> Int? {
-        let obj = any as AnyObject
-        if obj.responds(to: Selector(("UID"))) {
-            if let n = obj.value(forKey: "UID") as? NSNumber { return n.intValue }
-            if let u = obj.value(forKey: "UID") as? UInt32 { return Int(u) }
-            if let u = obj.value(forKey: "UID") as? Int { return u }
-        }
-        if let n = any as? NSNumber { return n.intValue }
-        return nil
     }
 
     /// 在容器内按文件名浅搜（Documents / Library / mmkv）

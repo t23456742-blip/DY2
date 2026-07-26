@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,8 +32,8 @@ fi
 echo "Using app: $APP_PATH"
 
 # 强制写入版本号（避免 CI 里 $(MARKETING_VERSION) 未展开变成默认 1.0）
-MARKETING_VERSION="${MARKETING_VERSION:-14.4}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-144}"
+MARKETING_VERSION="${MARKETING_VERSION:-14.5}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-145}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
@@ -71,3 +71,4 @@ rm -rf "$DIST/Payload"
 
 ls -lh "$DIST/${APP_NAME}.tipa"
 echo "Packaged: $DIST/${APP_NAME}.tipa"
+
