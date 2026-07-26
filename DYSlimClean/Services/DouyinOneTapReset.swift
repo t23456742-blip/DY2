@@ -553,7 +553,7 @@ enum DouyinOneTapReset {
                 }
             }
             // 关键字扫一遍（与删除逻辑同口径，只计数）
-            var broad: [String: Any] = [
+            let broad: [String: Any] = [
                 kSecClass as String: secClass,
                 kSecMatchLimit as String: kSecMatchLimitAll,
                 kSecReturnAttributes as String: true

@@ -93,8 +93,8 @@ final class CleanViewModel: ObservableObject {
             containerPath = url.path
             log("已找到抖音容器")
             Task.detached(priority: .utility) {
-                let bytes = Self.folderByteSize(url)
-                let text = await MainActor.run { Self.formatBytes(bytes) }
+                let bytes = ContainerDiskSize.byteSize(of: url)
+                let text = ContainerDiskSize.format(bytes)
                 await MainActor.run {
                     // 路径未变才更新，避免异步回来时容器已切换
                     if self.containerPath == url.path {
@@ -111,26 +111,11 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    private static func folderByteSize(_ root: URL) -> Int64 {
-        let fm = FileManager.default
-        guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey], options: [.skipsHiddenFiles]) else {
-            return 0
-        }
-        var total: Int64 = 0
-        for case let file as URL in en {
-            guard let vals = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
-                  vals.isRegularFile == true,
-                  let sz = vals.fileSize else { continue }
-            total += Int64(sz)
-        }
-        return total
-    }
-
     private func refreshLocatedContainerSizeOnly(at path: String) {
         let url = URL(fileURLWithPath: path)
         Task.detached(priority: .utility) {
-            let bytes = Self.folderByteSize(url)
-            let text = await MainActor.run { Self.formatBytes(bytes) }
+            let bytes = ContainerDiskSize.byteSize(of: url)
+            let text = ContainerDiskSize.format(bytes)
             await MainActor.run {
                 if self.containerPath == path {
                     self.containerSizeText = text
@@ -569,5 +554,39 @@ final class CleanViewModel: ObservableObject {
         if logLines.count > 200 {
             logLines.removeFirst(logLines.count - 200)
         }
+    }
+}
+
+/// 非 MainActor：供 Task.detached 统计容器体积
+enum ContainerDiskSize {
+    static func byteSize(of root: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let file as URL in en {
+            guard let vals = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
+                  vals.isRegularFile == true,
+                  let sz = vals.fileSize else { continue }
+            total += Int64(sz)
+        }
+        return total
+    }
+
+    static func format(_ bytes: Int64) -> String {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useKB, .useMB, .useGB, .useBytes]
+        f.countStyle = .file
+        f.includesUnit = true
+        f.isAdaptive = true
+        f.formattingContext = .standalone
+        return f.string(fromByteCount: bytes)
+            .replacingOccurrences(of: "bytes", with: "字节")
+            .replacingOccurrences(of: "byte", with: "字节")
+            .replacingOccurrences(of: "Bytes", with: "字节")
+            .replacingOccurrences(of: "Byte", with: "字节")
     }
 }
