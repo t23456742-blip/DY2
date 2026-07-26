@@ -57,7 +57,7 @@ enum DouyinOneTapReset {
         snap.keychainCount = countKeychainItems(bundleID: bundleID)
 
         let needles = vendorNeedles(bundleID: bundleID)
-        readExistingLSIdentifiers { dict in
+        if let dict = loadLSIdentifiersDict() {
             let vendors = (dict["Vendors"] as? [String: Any]) ?? [:]
             if let v = firstUUID(in: vendors, preferKeysMatching: needles) ?? firstAnyUUID(in: vendors) {
                 snap.vendorID = v
@@ -399,9 +399,10 @@ enum DouyinOneTapReset {
 
     // MARK: - 2 清钥匙串
 
-    /// 对齐 Fuck：`cleanKeychainForBundleId:` —— SecItem 删除抖音相关项（删后 App 会重建新标识）
+    /// 对齐 Fuck：`cleanKeychainForBundleId:` —— SecItem 删除；n==0 时诚实报失败感（权限/本就空）
     private static func clearKeychain(bundleID: String) -> StepResult {
         let name = "清钥匙串"
+        let before = countKeychainItems(bundleID: bundleID)
         let classes: [CFString] = [
             kSecClassGenericPassword,
             kSecClassInternetPassword,
@@ -427,17 +428,25 @@ enum DouyinOneTapReset {
             }
         }
 
-        let detail: String
-        if deleted > 0 {
-            detail = "已删除 \(deleted) 项钥匙串标识（Aweme/Team），下次启动会重建"
-        } else {
-            detail = "SecItem 无匹配（可能权限未生效或本就为空）；已尝试 TeamID.AccessGroup 强删"
+        let after = countKeychainItems(bundleID: bundleID)
+        if deleted > 0 || after < before {
+            return .init(
+                name: name,
+                ok: true,
+                detail: "已删 \(max(deleted, before - after)) 项 · 前 \(before) → 后 \(after)"
+            )
         }
-        return .init(name: name, ok: true, detail: detail)
+        if before == 0 {
+            return .init(name: name, ok: true, detail: "当前 0 项（本就为空或无权枚举）")
+        }
+        return .init(
+            name: name,
+            ok: false,
+            detail: "仍有 \(after) 项未删掉（SecItem 权限可能未生效，检查 tipa entitlements）"
+        )
     }
 
     private static func keychainKeywords(bundleID: String) -> [String] {
-        // 收紧：避免 idfa/idfv 等泛词误伤其它 App / 改机写入
         [
             bundleID,
             "com.ss.iphone.ugc.Aweme",
@@ -447,7 +456,11 @@ enum DouyinOneTapReset {
             "ByteDance",
             "ss.iphone.ugc",
             "UGCRJ42T19",
-            "3JTPEA4UU7"
+            "3JTPEA4UU7",
+            "openudid",
+            "sskeychain",
+            "device_id",
+            "install_id"
         ]
     }
 
@@ -579,93 +592,89 @@ enum DouyinOneTapReset {
 
     /// 只读扫描已有 lsdidentifiers
     private static func readExistingLSIdentifiers(_ body: ([String: Any]) -> Void) {
-        let fm = FileManager.default
-        var paths = Set(candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) })
-        for root in [
-            "/var/containers/Shared/SystemGroup",
-            "/private/var/containers/Shared/SystemGroup",
-            "/var/mobile/Library/Caches",
-            "/private/var/mobile/Library/Caches"
-        ] where fm.fileExists(atPath: root) {
-            if let more = findFiles(namedHints: ["lsdidentifiers"], under: root, maxDepth: 4) {
-                more.forEach { paths.insert($0) }
-            }
+        if let dict = loadLSIdentifiersDict() { body(dict) }
+    }
+
+    private static func loadLSIdentifiersDict() -> [String: Any]? {
+        for path in resolveLSIdentifierPaths(createIfMissing: false) {
+            if let dict = readPlist(URL(fileURLWithPath: path)) { return dict }
         }
-        for path in paths {
-            let url = URL(fileURLWithPath: path)
-            if let dict = readPlist(url) {
-                body(dict)
-                return
-            }
-        }
+        return nil
     }
 
     // MARK: - 3 刷新标识符（Vendor / IDFV）
 
-    /// 对齐工具箱 refreshUUID：有则改，没有就按 Bundle/Team 键写入（工具箱也会「生成新的」）
+    /// 对齐工具箱 refreshUUID：有则改，没有就创建/写入（工具箱也会「生成新的」）
     private static func refreshVendorIdentifier(bundleID: String) -> StepResult {
         let name = "刷新标识符"
         let newVendor = UUID().uuidString.uppercased()
         let needles = vendorNeedles(bundleID: bundleID)
 
         var oldShown = "未找到"
-        let touched = mutateExistingLSIdentifiersPlist { dict in
-            var vendors = (dict["Vendors"] as? [String: Any]) ?? [:]
-            let before = firstUUID(in: vendors, preferKeysMatching: needles) ?? firstAnyUUID(in: vendors)
-            if let before { oldShown = before }
+        var writtenPath = ""
+        let touched = mutateLSIdentifiersPlist(
+            createIfMissing: true,
+            body: { dict in
+                var vendors = (dict["Vendors"] as? [String: Any]) ?? [:]
+                let before = firstUUID(in: vendors, preferKeysMatching: needles) ?? firstAnyUUID(in: vendors)
+                if let before { oldShown = before }
 
-            let replaced = replaceUUIDValues(in: vendors, preferKeysMatching: needles, newValue: { _ in newVendor })
-            if treeContains(replaced, needle: newVendor) {
-                vendors = replaced
-            } else {
-                // 工具箱行为：没匹配到抖音键也照样写入，让系统下次读到新 IDFV
-                vendors = upsertVendorKeys(vendors, bundleID: bundleID, uuid: newVendor)
-            }
-            dict["Vendors"] = vendors
-            // 部分系统也会在根上挂 vendor 字符串
-            if let root = dict["Vendor"] as? String, looksLikeUUID(root) {
+                let replaced = replaceUUIDValues(in: vendors, preferKeysMatching: needles, newValue: { _ in newVendor })
+                if treeContains(replaced, needle: newVendor) {
+                    vendors = replaced
+                } else {
+                    vendors = upsertVendorKeys(vendors, bundleID: bundleID, uuid: newVendor)
+                }
+                dict["Vendors"] = vendors
                 dict["Vendor"] = newVendor
-            }
-            return treeContains(vendors, needle: newVendor) || (dict["Vendor"] as? String) == newVendor
-        }
+                return treeContains(vendors, needle: newVendor) || (dict["Vendor"] as? String) == newVendor
+            },
+            writtenPath: { writtenPath = $0 }
+        )
 
         let tip = touched
-            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newVendor))"
-            : "未写入 Vendor（lsdidentifiers 不可写/不存在）"
+            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newVendor))\n\(writtenPath)"
+            : "未写入 Vendor（lsdidentifiers 不可写）\n候选：\(resolveLSIdentifierPaths(createIfMissing: false).prefix(2).joined(separator: " | "))"
         return .init(name: name, ok: touched, detail: tip)
     }
 
     // MARK: - 4 刷新广告符（Advertiser / IDFA）
 
-    /// 对齐工具箱：广告符「未找到」时仍会生成新 IDFA（截图里刷新前=未找到，刷新后仍有新值）
+    /// 对齐工具箱：广告符「未找到」时仍会生成新 IDFA
     private static func refreshAdvertisingIdentifier(bundleID: String) -> StepResult {
         let name = "刷新广告符"
         let newAd = UUID().uuidString.uppercased()
         var oldShown = "未找到"
+        var writtenPath = ""
 
-        let touched = mutateExistingLSIdentifiersPlist { dict in
-            var ads = (dict["Advertisers"] as? [String: Any]) ?? [:]
-            if let old = firstAnyUUID(in: ads) ?? (dict["Advertiser"] as? String).flatMap({ looksLikeUUID($0) ? $0 : nil }) {
-                oldShown = old
-            }
+        let touched = mutateLSIdentifiersPlist(
+            createIfMissing: true,
+            body: { dict in
+                var ads = (dict["Advertisers"] as? [String: Any]) ?? [:]
+                if let old = firstUUID(in: ads, preferKeysMatching: [bundleID])
+                    ?? firstAnyUUID(in: ads)
+                    ?? (dict["Advertiser"] as? String).flatMap({ looksLikeUUID($0) ? $0 : nil }) {
+                    oldShown = old
+                }
 
-            if !ads.isEmpty {
-                ads = replaceUUIDValues(in: ads, preferKeysMatching: [], newValue: { _ in newAd })
-            }
-            // 没有 Advertisers / 没有 UUID 可替换 → 直接新建（工具箱同款）
-            if !treeContains(ads, needle: newAd) {
-                ads[bundleID] = newAd
-                ads["Advertiser"] = newAd
-                if ads["Default"] == nil { ads["Default"] = newAd }
-            }
-            dict["Advertisers"] = ads
-            dict["Advertiser"] = newAd
-            return true
-        }
+                if !ads.isEmpty {
+                    ads = replaceUUIDValues(in: ads, preferKeysMatching: [], newValue: { _ in newAd })
+                }
+                if !treeContains(ads, needle: newAd) {
+                    ads[bundleID] = newAd
+                    ads["Advertiser"] = newAd
+                    if ads["Default"] == nil { ads["Default"] = newAd }
+                }
+                dict["Advertisers"] = ads
+                dict["Advertiser"] = newAd
+                return true
+            },
+            writtenPath: { writtenPath = $0 }
+        )
 
         let tip = touched
-            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newAd))"
-            : "未写入 Advertisers（lsdidentifiers 不可写/不存在）"
+            ? "旧 \(shortUUID(oldShown)) → 新 \(shortUUID(newAd))\n\(writtenPath)"
+            : "未写入 Advertisers（lsdidentifiers 不可写）"
         return .init(name: name, ok: touched, detail: tip)
     }
 
@@ -730,33 +739,73 @@ enum DouyinOneTapReset {
         return nil
     }
 
-    /// 只改磁盘上「已经存在」的 lsdidentifiers；绝不批量造假路径文件
+    /// 改 lsdidentifiers：已有则改；没有则在首选路径创建最小 plist（对齐工具箱「未找到也生成」）
+    @discardableResult
+    private static func mutateLSIdentifiersPlist(
+        createIfMissing: Bool,
+        body: (inout [String: Any]) -> Bool,
+        writtenPath: ((String) -> Void)? = nil
+    ) -> Bool {
+        var paths = resolveLSIdentifierPaths(createIfMissing: createIfMissing)
+        guard !paths.isEmpty else { return false }
+
+        var any = false
+        var lastOK = ""
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            var dict = readPlist(url) ?? ["Vendors": [String: Any](), "Advertisers": [String: Any]()]
+            if body(&dict), writePlist(dict, to: url) {
+                any = true
+                lastOK = path
+            }
+        }
+        if any { writtenPath?(lastOK) }
+        return any
+    }
+
+    /// 兼容旧名
     @discardableResult
     private static func mutateExistingLSIdentifiersPlist(_ body: (inout [String: Any]) -> Bool) -> Bool {
+        mutateLSIdentifiersPlist(createIfMissing: false, body: body)
+    }
+
+    private static func resolveLSIdentifierPaths(createIfMissing: Bool) -> [String] {
         let fm = FileManager.default
         var paths = Set(candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) })
-        // RootHide / 多 SystemGroup：再扫一层已有目录里的同名文件
         for root in [
             "/var/containers/Shared/SystemGroup",
             "/private/var/containers/Shared/SystemGroup",
             "/var/mobile/Library/Caches",
-            "/private/var/mobile/Library/Caches"
+            "/private/var/mobile/Library/Caches",
+            "/var/mobile/Library/Preferences",
+            "/private/var/mobile/Library/Preferences"
         ] where fm.fileExists(atPath: root) {
-            if let more = findFiles(namedHints: ["lsdidentifiers"], under: root, maxDepth: 4) {
+            if let more = findFiles(namedHints: ["lsdidentifiers"], under: root, maxDepth: 5) {
                 more.forEach { paths.insert($0) }
             }
         }
-        guard !paths.isEmpty else { return false }
-
-        var any = false
-        for path in paths {
-            let url = URL(fileURLWithPath: path)
-            guard var dict = readPlist(url) else { continue }
-            if body(&dict), writePlist(dict, to: url) {
-                any = true
+        if paths.isEmpty, createIfMissing {
+            // 首选可写路径：mobile Library Caches
+            let preferred = [
+                "/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
+                "/private/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
+                "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile.shared_container/Library/Caches/com.apple.lsdidentifiers.plist"
+            ]
+            for p in preferred {
+                let dir = (p as NSString).deletingLastPathComponent
+                if !fm.fileExists(atPath: dir) {
+                    try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                }
+                if fm.fileExists(atPath: dir) || (try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)) != nil {
+                    let empty: [String: Any] = ["Vendors": [String: Any](), "Advertisers": [String: Any]()]
+                    if writePlist(empty, to: URL(fileURLWithPath: p)) {
+                        paths.insert(p)
+                        break
+                    }
+                }
             }
         }
-        return any
+        return Array(paths).sorted()
     }
 
     private static func candidateIdentifierPlistPaths() -> [String] {

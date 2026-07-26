@@ -53,6 +53,9 @@ final class CleanViewModel: ObservableObject {
     @Published var accountQueryRows: [(String, String)] = []
     @Published var showParamExtractResult = false
     @Published var paramExtractText = ""
+    @Published var thorBackups: [ThorBackupIndex.Entry] = []
+    @Published var showThorExtractResult = false
+    @Published var thorExtractText = ""
     @Published var shellPath: String = UserDefaults.standard.string(forKey: "dyshell.path")
         ?? "/var/mobile/Media/dyclean.sh"
     @Published var showShellResult = false
@@ -84,6 +87,41 @@ final class CleanViewModel: ObservableObject {
         keepCount = cleaner.keepList.count
         log("已加载白名单 \(keepCount) 条")
         refreshLocatedContainer()
+        reloadThorBackups()
+    }
+
+    func reloadThorBackups() {
+        let list = ThorBackupIndex.load()
+        thorBackups = list
+        log(list.isEmpty ? "雷神备份：未找到 backup_index / Backups" : "雷神备份：\(list.count) 条")
+    }
+
+    /// 对雷神备份包提参（不是在线查询）
+    func extractFromThorBackup(_ entry: ThorBackupIndex.Entry) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "备份提参…"
+        log("雷神备份提参：\(entry.name)\n\(entry.folderPath)")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: entry.folderPath) else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.thorExtractText = "备份包内未找到抖音数据\n备注：\(entry.name)\n\(entry.folderPath)"
+                    self.showThorExtractResult = true
+                    self.log(self.thorExtractText)
+                }
+                return
+            }
+            let r = DouyinParamExtractor.extractAndSave(cleaner: cleaner, container: root)
+            await MainActor.run {
+                self.isBusy = false
+                self.thorExtractText = "备注：\(entry.name)\n\(r.message)"
+                self.showThorExtractResult = true
+                self.paramExtractText = self.thorExtractText
+                self.showParamExtractResult = true
+                self.log(self.thorExtractText)
+            }
+        }
     }
 
     /// 刷新已定位容器路径 + 数据体积（本机沙盒）
@@ -91,7 +129,7 @@ final class CleanViewModel: ObservableObject {
         if let url = cleaner.locateAwemeContainer() {
             containerFound = true
             containerPath = url.path
-            log("已找到抖音容器")
+            log("已找到抖音容器：\(url.path)")
             Task.detached(priority: .utility) {
                 let bytes = ContainerDiskSize.byteSize(of: url)
                 let text = ContainerDiskSize.format(bytes)
@@ -107,7 +145,9 @@ final class CleanViewModel: ObservableObject {
             containerFound = false
             containerPath = ""
             containerSizeText = "—"
+            let diag = cleaner.locateAwemeDiagnostics()
             log("未找到抖音数据容器（请确认已安装抖音，且本软件已用巨魔安装）")
+            log(diag)
         }
     }
 
@@ -492,6 +532,9 @@ final class CleanViewModel: ObservableObject {
                 self.showAccountQueryResult = true
                 if snap.douyinID != "—" {
                     self.containerFound = true
+                }
+                if !self.containerFound {
+                    self.log(cleaner.locateAwemeDiagnostics())
                 }
                 self.log(snap.detail)
                 self.log(snap.message)

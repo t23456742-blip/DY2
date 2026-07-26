@@ -233,115 +233,28 @@ final class SlimCleaner: @unchecked Sendable {
     func locateAwemeContainer() -> URL? {
         // 半刷新后系统可能指向「空新容器」，真数据还在孤儿目录。
         // 优先返回带抖音数据指纹的目录，再退回系统 proxy。
-        if let url = locateViaMarkers(), containerLooksPopulated(url) { return url }
-        if let url = locateViaContainerMetadata(), containerLooksPopulated(url) { return url }
+        // 固定扫 /var/mobile/Containers/Data/Application（及 private / jbroot）
+        if let url = AppContainerLocator.locateViaMarkers(Self.awemeBundleID), containerLooksPopulated(url) { return url }
+        if let url = AppContainerLocator.locateViaMetadata(Self.awemeBundleID), containerLooksPopulated(url) { return url }
         if let url = locateViaApplicationProxy(), containerLooksPopulated(url) { return url }
-        if let url = locateViaMarkers() { return url }
-        if let url = locateViaContainerMetadata() { return url }
+        if let url = AppContainerLocator.locateViaMarkers(Self.awemeBundleID) { return url }
+        if let url = AppContainerLocator.locateViaMetadata(Self.awemeBundleID) { return url }
         return locateViaApplicationProxy()
+    }
+
+    /// 定位失败时的诊断文案
+    func locateAwemeDiagnostics() -> String {
+        AppContainerLocator.locateDiagnostics(bundleIDs: [Self.awemeBundleID])
     }
 
     /// Documents 里有 mmkv / Aweme.db / 非空 Library 才算「有数据」
     private func containerLooksPopulated(_ url: URL) -> Bool {
-        let fm = FileManager.default
-        let markers = [
-            "Documents/Aweme.db",
-            "Documents/mmkv",
-            "Documents/_ttinstall_document",
-            "Library/Preferences",
-            "Library/Caches"
-        ]
-        for rel in markers {
-            let p = url.appendingPathComponent(rel)
-            if fm.fileExists(atPath: p.path) {
-                if let kids = try? fm.contentsOfDirectory(atPath: p.path), !kids.isEmpty { return true }
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: p.path, isDirectory: &isDir), !isDir.boolValue {
-                    return true
-                }
-            }
-        }
-        // 目录总大小粗判
-        if let enumr = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]) {
-            var total: Int64 = 0
-            var n = 0
-            for case let f as URL in enumr {
-                n += 1
-                if n > 80 { return true }
-                if let v = try? f.resourceValues(forKeys: [.fileSizeKey]), let sz = v.fileSize {
-                    total += Int64(sz)
-                    if total > 256_000 { return true }
-                }
-            }
-        }
-        return false
+        AppContainerLocator.containerLooksPopulated(url)
     }
 
     /// Same SPI the toolbox uses: LSApplicationProxy.dataContainerURL
     private func locateViaApplicationProxy() -> URL? {
-        guard let proxyClass = NSClassFromString("LSApplicationProxy") as? NSObject.Type else { return nil }
-        let sel = NSSelectorFromString("applicationProxyForIdentifier:")
-        guard proxyClass.responds(to: sel) else { return nil }
-
-        let proxy = proxyClass.perform(sel, with: Self.awemeBundleID)?.takeUnretainedValue() as? NSObject
-        guard let proxy else { return nil }
-
-        let urlSel = NSSelectorFromString("dataContainerURL")
-        guard proxy.responds(to: urlSel),
-              let url = proxy.perform(urlSel)?.takeUnretainedValue() as? URL,
-              !url.path.isEmpty,
-              FileManager.default.fileExists(atPath: url.path)
-        else { return nil }
-        return url
-    }
-
-    private func locateViaContainerMetadata() -> URL? {
-        let roots = [
-            "/var/mobile/Containers/Data/Application",
-            "/private/var/mobile/Containers/Data/Application"
-        ]
-        let fm = FileManager.default
-        for rootPath in roots {
-            let root = URL(fileURLWithPath: rootPath, isDirectory: true)
-            guard let dirs = try? fm.contentsOfDirectory(
-                at: root,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: []
-            ) else { continue }
-
-            for dir in dirs {
-                let meta = dir.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
-                guard
-                    let data = try? Data(contentsOf: meta),
-                    let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-                    let identifier = plist["MCMMetadataIdentifier"] as? String,
-                    identifier == Self.awemeBundleID
-                else { continue }
-                return dir
-            }
-        }
-        return nil
-    }
-
-    /// Last resort: Aweme.db / mmkv fingerprints inside data containers.
-    private func locateViaMarkers() -> URL? {
-        let roots = [
-            "/var/mobile/Containers/Data/Application",
-            "/private/var/mobile/Containers/Data/Application"
-        ]
-        let fm = FileManager.default
-        for rootPath in roots {
-            let root = URL(fileURLWithPath: rootPath, isDirectory: true)
-            guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: []) else { continue }
-            for dir in dirs {
-                let awemeDB = dir.appendingPathComponent("Documents/Aweme.db")
-                let mmkv = dir.appendingPathComponent("Documents/mmkv")
-                if fm.fileExists(atPath: awemeDB.path) || fm.fileExists(atPath: mmkv.path) {
-                    return dir
-                }
-            }
-        }
-        return nil
+        AppContainerLocator.locateViaProxy(Self.awemeBundleID)
     }
 
     func scan() -> ScanResult {
@@ -356,7 +269,8 @@ final class SlimCleaner: @unchecked Sendable {
         }
         // 若系统指向空壳、真数据在孤儿目录：尝试把 MCM 指回有数据的目录
         if !containerLooksPopulated(container),
-           let fat = locateViaMarkers() ?? locateViaContainerMetadata(),
+           let fat = AppContainerLocator.locateViaMarkers(Self.awemeBundleID)
+            ?? AppContainerLocator.locateViaMetadata(Self.awemeBundleID),
            containerLooksPopulated(fat),
            fat.path != container.path {
             _ = DouyinOneTapReset.relinkContainerIfPossible(

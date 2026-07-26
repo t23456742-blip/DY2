@@ -20,6 +20,7 @@ struct ContentView: View {
                     header
                     statusCard
                     accountQueryCard
+                    thorBackupCard
                     migrateCard
                     sizeCompareCard
                     statsRow
@@ -106,6 +107,11 @@ struct ContentView: View {
             Button("好的", role: .cancel) {}
         } message: {
             Text(model.paramExtractText)
+        }
+        .alert("雷神备份提参", isPresented: $model.showThorExtractResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.thorExtractText)
         }
     }
 
@@ -305,6 +311,80 @@ struct ContentView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(accent.opacity(0.22), lineWidth: 1)
+        )
+    }
+
+    private var thorBackupCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("雷神备份")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.white.opacity(0.9))
+                Spacer()
+                Button {
+                    model.reloadThorBackups()
+                } label: {
+                    Text("刷新")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(accent.opacity(0.18))
+                        .foregroundColor(accent)
+                        .clipShape(Capsule())
+                }
+                .disabled(model.isBusy)
+            }
+            Text("读 backup_index.plist · 备注=抖音号-密码 · 点一项从备份包提参（不走在线查询）")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.45))
+
+            if model.thorBackups.isEmpty {
+                Text("未找到雷神索引：/var/mobile/Thor/backup_index.plist")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(model.thorBackups.prefix(12)) { entry in
+                        Button {
+                            model.extractFromThorBackup(entry)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(entry.name)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundColor(.white)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text(entry.sizeText)
+                                        .font(.caption2)
+                                        .foregroundColor(accent)
+                                }
+                                Text(entry.createdAt.isEmpty ? entry.folderPath : entry.createdAt)
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.4))
+                                    .lineLimit(1)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.black.opacity(0.28))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                        .disabled(model.isBusy)
+                    }
+                    if model.thorBackups.count > 12 {
+                        Text("共 \(model.thorBackups.count) 条，仅显示最近 12 条")
+                            .font(.caption2)
+                            .foregroundColor(.white.opacity(0.35))
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
         )
     }
 

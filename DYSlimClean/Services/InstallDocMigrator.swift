@@ -116,6 +116,9 @@ enum AppContainerLocator {
             if let url = locateViaMetadata(bid), containerLooksPopulated(url) { return (bid, url) }
         }
         for bid in bundleIDs {
+            if let url = locateViaMarkers(bid), containerLooksPopulated(url) { return (bid, url) }
+        }
+        for bid in bundleIDs {
             if let url = locateViaProxy(bid), containerLooksPopulated(url) { return (bid, url) }
         }
         for bid in bundleIDs {
@@ -124,18 +127,56 @@ enum AppContainerLocator {
         for bid in bundleIDs {
             if let url = locateViaMetadata(bid) { return (bid, url) }
         }
+        for bid in bundleIDs {
+            if let url = locateViaMarkers(bid) { return (bid, url) }
+        }
         return nil
+    }
+
+    /// 本机 Application 容器根（含 private / jbroot）
+    static func applicationDataRoots() -> [String] {
+        var roots = [
+            "/var/mobile/Containers/Data/Application",
+            "/private/var/mobile/Containers/Data/Application"
+        ]
+        for jb in [
+            "/var/jb",
+            "/private/var/jb",
+            "/var/containers/Bundle/Application/.jbroot",
+            FileManager.default.currentDirectoryPath
+        ] {
+            let p = (jb as NSString).appendingPathComponent("var/mobile/Containers/Data/Application")
+            if FileManager.default.fileExists(atPath: p), !roots.contains(p) {
+                roots.append(p)
+            }
+        }
+        // RootHide：若环境变量 / 常见 symlink
+        if let env = ProcessInfo.processInfo.environment["JBROOT"], !env.isEmpty {
+            let p = (env as NSString).appendingPathComponent("var/mobile/Containers/Data/Application")
+            if FileManager.default.fileExists(atPath: p), !roots.contains(p) {
+                roots.append(p)
+            }
+        }
+        return roots
     }
 
     static func containerLooksPopulated(_ url: URL) -> Bool {
         let fm = FileManager.default
-        for rel in ["Documents/Aweme.db", "Documents/mmkv", "Documents/_ttinstall_document", "Library/Preferences"] {
-            let p = url.appendingPathComponent(rel).path
-            if fm.fileExists(atPath: p) {
+        let markers = [
+            "Documents/Aweme.db",
+            "Documents/mmkv",
+            "Documents/_ttinstall_document",
+            "Library/Preferences/com.ss.iphone.ugc.Aweme.plist",
+            "Library/Preferences",
+            "Library/Caches"
+        ]
+        for rel in markers {
+            let p = url.appendingPathComponent(rel)
+            if fm.fileExists(atPath: p.path) {
                 var isDir: ObjCBool = false
-                if fm.fileExists(atPath: p, isDirectory: &isDir) {
+                if fm.fileExists(atPath: p.path, isDirectory: &isDir) {
                     if isDir.boolValue {
-                        if let kids = try? fm.contentsOfDirectory(atPath: p), !kids.isEmpty { return true }
+                        if let kids = try? fm.contentsOfDirectory(atPath: p.path), !kids.isEmpty { return true }
                     } else {
                         return true
                     }
@@ -161,12 +202,8 @@ enum AppContainerLocator {
     }
 
     static func locateViaMetadata(_ bundleID: String) -> URL? {
-        let roots = [
-            "/var/mobile/Containers/Data/Application",
-            "/private/var/mobile/Containers/Data/Application"
-        ]
         let fm = FileManager.default
-        for rootPath in roots {
+        for rootPath in applicationDataRoots() {
             let root = URL(fileURLWithPath: rootPath, isDirectory: true)
             guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
             for dir in dirs {
@@ -181,6 +218,57 @@ enum AppContainerLocator {
             }
         }
         return nil
+    }
+
+    /// 指纹定位（Aweme.db / mmkv / Aweme.plist）
+    static func locateViaMarkers(_ bundleID: String? = nil) -> URL? {
+        let fm = FileManager.default
+        let wantAweme = bundleID == nil
+            || (bundleID?.caseInsensitiveCompare("com.ss.iphone.ugc.Aweme") == .orderedSame)
+        for rootPath in applicationDataRoots() {
+            let root = URL(fileURLWithPath: rootPath, isDirectory: true)
+            guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
+            for dir in dirs {
+                if let bundleID {
+                    let meta = dir.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+                    if let data = try? Data(contentsOf: meta),
+                       let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+                       let id = plist["MCMMetadataIdentifier"] as? String,
+                       id.caseInsensitiveCompare(bundleID) != .orderedSame {
+                        // 有 metadata 且不是目标 bundle → 跳过；无 metadata 时仍可用指纹（仅抖音）
+                        if !wantAweme { continue }
+                        continue
+                    }
+                }
+                let hits = [
+                    "Documents/Aweme.db",
+                    "Documents/mmkv",
+                    "Documents/_ttinstall_document",
+                    "Library/Preferences/com.ss.iphone.ugc.Aweme.plist"
+                ]
+                for rel in hits where fm.fileExists(atPath: dir.appendingPathComponent(rel).path) {
+                    if wantAweme || bundleID != nil { return dir }
+                }
+            }
+        }
+        return nil
+    }
+
+    /// 定位诊断：扫过的 root 与目录数（写日志用）
+    static func locateDiagnostics(bundleIDs: [String]) -> String {
+        let fm = FileManager.default
+        var lines: [String] = []
+        for root in applicationDataRoots() {
+            let exists = fm.fileExists(atPath: root)
+            let count = (try? fm.contentsOfDirectory(atPath: root))?.count ?? -1
+            lines.append("\(root) exists=\(exists) dirs=\(count)")
+        }
+        if let hit = locateContainer(bundleIDs: bundleIDs) {
+            lines.append("hit=\(hit.bundleID) path=\(hit.url.path)")
+        } else {
+            lines.append("hit=nil bundles=\(bundleIDs.joined(separator: ","))")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 
