@@ -276,6 +276,59 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
+    /// 备份包精简：按当前瘦身规则删除 Aweme 容器内多余文件（原地瘦身）
+    func slimThorBackup(_ entry: ThorBackupIndex.Entry) {
+        slimBackupPack(displayName: "雷神·\(entry.accountPasswordText)", packPath: entry.displayPath)
+    }
+
+    func slimRazerBackup(_ entry: RazerBackupIndex.Entry) {
+        slimBackupPack(displayName: "雷蛇·\(entry.listTitle)", packPath: entry.displayPath)
+    }
+
+    private func slimBackupPack(displayName: String, packPath: String) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "备份精简…"
+        log("【备份精简】\(displayName)\n\(packPath)")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: packPath) else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.cleanResultText = "失败"
+                    self.cachePackResultText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n\(packPath)"
+                    self.showCachePackResult = true
+                    self.log(self.cachePackResultText)
+                }
+                return
+            }
+            let scan = cleaner.scan(container: root)
+            if let err = scan.error {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.cachePackResultText = "扫描失败：\(err)"
+                    self.showCachePackResult = true
+                    self.log(self.cachePackResultText)
+                }
+                return
+            }
+            let before = scan.totalBytes
+            let summary = cleaner.delete(urls: scan.extras, relativeTo: root)
+            let msg = """
+            \(displayName) 精简完成
+            路径：\(root.path)
+            删除 \(summary.deleted) 个文件（失败 \(summary.failed)）
+            释放约 \(ContainerDiskSize.format(summary.freedBytes))
+            扫描前 \(ContainerDiskSize.format(before)) · 保留 \(scan.keepHits) / 共 \(scan.total)
+            """
+            await MainActor.run {
+                self.isBusy = false
+                self.cachePackResultText = msg
+                self.showCachePackResult = true
+                self.log(msg)
+            }
+        }
+    }
+
     /// 详情只保留业务字段，去掉路径/来源
     private static func displayQueryRows(
         from snap: DouyinAccountQuery.Snapshot,

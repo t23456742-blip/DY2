@@ -335,7 +335,8 @@ struct ContentView: View {
                             entry: entry,
                             busy: model.isBusy,
                             onQuery: { model.queryFromThorBackup(entry) },
-                            onExtract: { model.extractFromThorBackup(entry) }
+                            onExtract: { model.extractFromThorBackup(entry) },
+                            onSlim: { model.slimThorBackup(entry) }
                         )
                     }
                 }
@@ -400,7 +401,8 @@ struct ContentView: View {
                             entry: entry,
                             busy: model.isBusy,
                             onQuery: { model.queryFromRazerBackup(entry) },
-                            onExtract: { model.extractFromRazerBackup(entry) }
+                            onExtract: { model.extractFromRazerBackup(entry) },
+                            onSlim: { model.slimRazerBackup(entry) }
                         )
                     }
                 }
@@ -866,6 +868,7 @@ private struct ThorBackupRowView: View {
     let busy: Bool
     let onQuery: () -> Void
     let onExtract: () -> Void
+    let onSlim: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -894,7 +897,7 @@ private struct ThorBackupRowView: View {
             Button(action: onQuery) {
                 Text("查询")
                     .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 8)
                     .background(Color(red: 0.35, green: 0.55, blue: 1.0))
                     .foregroundColor(.white)
@@ -905,9 +908,20 @@ private struct ThorBackupRowView: View {
             Button(action: onExtract) {
                 Text("提参")
                     .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 8)
                     .background(Color(red: 0.95, green: 0.45, blue: 0.35))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+
+            Button(action: onSlim) {
+                Text("精简")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.2, green: 0.72, blue: 0.55))
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
@@ -942,6 +956,7 @@ private struct RazerBackupRowView: View {
     let busy: Bool
     let onQuery: () -> Void
     let onExtract: () -> Void
+    let onSlim: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
@@ -970,7 +985,7 @@ private struct RazerBackupRowView: View {
             Button(action: onQuery) {
                 Text("查询")
                     .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 8)
                     .background(Color(red: 0.35, green: 0.55, blue: 1.0))
                     .foregroundColor(.white)
@@ -981,9 +996,20 @@ private struct RazerBackupRowView: View {
             Button(action: onExtract) {
                 Text("提参")
                     .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
                     .padding(.vertical, 8)
                     .background(Color(red: 0.95, green: 0.45, blue: 0.35))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+
+            Button(action: onSlim) {
+                Text("精简")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.2, green: 0.72, blue: 0.55))
                     .foregroundColor(.white)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }

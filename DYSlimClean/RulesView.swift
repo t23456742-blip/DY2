@@ -197,6 +197,12 @@ struct RulesView: View {
             Text("默认精简 = 指定 Documents 文件夹 + 精简包白名单。_ttinstall 与商城/搜索强制保留。")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.5))
+            Text("目录树按体积排序；每项下方说明对应作用（对照备份包 Documents/Library/tmp）。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.45))
+            Text("大头常见：Library/Application Support、Pitaya、Caches、AWEStorage、Documents/mmkv / ies-effects。")
+                .font(.caption2)
+                .foregroundColor(.white.opacity(0.4))
         }
         .padding(.vertical, 8)
     }
@@ -310,6 +316,9 @@ struct RulesView: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 0)
+                    Text(node.sizeText)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(.white.opacity(0.55))
                     Text(kept ? "保留" : "删除")
                         .font(.caption2.weight(.bold))
                         .foregroundColor(kept ? accent : danger)
@@ -322,6 +331,11 @@ struct RulesView: View {
                     Text(hint)
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.4))
+                        .padding(.leading, 22)
+                } else if node.isDirectory, node.depth <= 2 {
+                    Text("展开查看子目录与大小")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.28))
                         .padding(.leading, 22)
                 }
             }

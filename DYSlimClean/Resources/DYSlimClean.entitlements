@@ -2,6 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- ===== 对齐 Fuck 工具箱 com.ai.iosxcode 1.8.5：改机/容器/钥匙串必需 ===== -->
 	<key>platform-application</key>
 	<true/>
 	<key>com.apple.private.security.no-container</key>
@@ -20,33 +21,79 @@
 	<true/>
 	<key>com.apple.private.security.container-manager</key>
 	<true/>
-	<key>com.apple.private.tcc.allow</key>
-	<array>
-		<string>kTCCServiceSystemPolicyAllFiles</string>
-		<string>kTCCServiceSystemPolicyDocumentsFolder</string>
-		<string>kTCCServiceSystemPolicyDownloadsFolder</string>
-		<string>kTCCServiceSystemPolicyDesktopFolder</string>
-	</array>
-	<key>com.apple.private.tcc.manager</key>
+	<key>com.apple.private.persona-mgmt</key>
 	<true/>
+	<key>com.apple.private.xpc.persona-manager</key>
+	<true/>
+	<key>com.apple.private.process-management</key>
+	<true/>
+
+	<!-- 全盘读写（截图：未启用沙盒 / 无限制容器） -->
 	<key>com.apple.security.exception.files.absolute-path.read-write</key>
 	<array>
 		<string>/</string>
 	</array>
-	<key>com.apple.security.exception.mach-lookup.global-name</key>
+
+	<!-- TCC：对齐工具箱截图里的隐私项 + AllFiles -->
+	<key>com.apple.private.tcc.allow</key>
 	<array>
-		<string>com.opa334.jailbreakd</string>
+		<string>kTCCServiceLiverpool</string>
+		<string>kTCCServiceSpeechRecognition</string>
+		<string>kTCCServicePostEvent</string>
+		<string>kTCCServiceSystemPolicyAllFiles</string>
+		<string>kTCCServiceSystemPolicyDesktopFolder</string>
+		<string>kTCCServiceLocation</string>
+		<string>kTCCServiceMediaLibrary</string>
+		<string>kTCCServiceUbiquity</string>
+		<string>kTCCServiceSystemPolicyDownloadsFolder</string>
+		<string>kTCCServiceSystemPolicyDocumentsFolder</string>
+		<string>kTCCServiceMicrophone</string>
 	</array>
-	<key>com.apple.security.exception.shared-preference.read-write</key>
+	<key>com.apple.private.tcc.manager</key>
+	<true/>
+	<key>com.apple.private.tccd</key>
 	<array>
-		<string>com.opa334.Dopamine</string>
+		<string>kTCCServiceAll</string>
 	</array>
+
+	<!-- 进程控制：杀抖音 / 刷新容器前 terminate（工具箱有，我们原先缺） -->
+	<key>task_for_pid-allow</key>
+	<true/>
 	<key>com.apple.security.get-task-allow</key>
 	<true/>
 	<key>get-task-allow</key>
 	<true/>
+	<key>com.apple.system-task-ports</key>
+	<true/>
+	<key>com.apple.system-task-ports.control</key>
+	<true/>
+	<key>com.apple.system-task-ports.token.control</key>
+	<true/>
+	<key>proc_info-allow</key>
+	<true/>
 	<key>run-unsigned-code</key>
 	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.debugger</key>
+	<true/>
+
+	<key>com.apple.runningboard.assertions.frontboard</key>
+	<true/>
+	<key>com.apple.runningboard.hereditarygrantoriginator</key>
+	<true/>
+	<key>com.apple.runningboard.launchprocess</key>
+	<true/>
+	<key>com.apple.runningboard.primitiveattribute</key>
+	<true/>
+	<key>com.apple.runningboard.process-state</key>
+	<true/>
+	<key>com.apple.runningboard.targetidentities</key>
+	<true/>
+	<key>com.apple.runningboard.terminateprocess</key>
+	<true/>
+
+	<!-- 钥匙串：截图里的三组 + 抖音 TeamID（工具箱 UI 只显示前三，实际清钥匙串靠 SecItem + 无沙盒） -->
 	<key>com.apple.keystore.access</key>
 	<true/>
 	<key>com.apple.keystore.device-access</key>
@@ -61,10 +108,8 @@
 		<string>UGCRJ42T19.*</string>
 		<string>3JTPEA4UU7.*</string>
 	</array>
-	<key>application-identifier</key>
-	<string>*.com.dyslim.cleaner</string>
-	<key>com.apple.developer.team-identifier</key>
-	<string>*</string>
+
+	<!-- SpringBoard / 启动杀进程 -->
 	<key>com.apple.springboard-ui.client</key>
 	<true/>
 	<key>com.apple.springboard.SpringBoardServices</key>
@@ -75,9 +120,34 @@
 	<true/>
 	<key>com.apple.springboard.launchapplications</key>
 	<true/>
+	<key>com.apple.springboard.debugapplications</key>
+	<true/>
 	<key>com.apple.springboard.CFUserNotification</key>
 	<true/>
-	<key>proc_info-allow</key>
-	<true/>
+
+	<!-- 注册容器（对齐 registerAppAtPath） -->
+	<key>com.apple.private.mobileinstall.allowedSPI</key>
+	<array>
+		<string>InstallForLaunchServices</string>
+		<string>Install</string>
+		<string>UninstallForLaunchServices</string>
+		<string>Uninstall</string>
+		<string>UpdatePlaceholderMetadata</string>
+	</array>
+
+	<!-- Dopamine / jailbreakd -->
+	<key>com.apple.security.exception.mach-lookup.global-name</key>
+	<array>
+		<string>com.opa334.jailbreakd</string>
+	</array>
+	<key>com.apple.security.exception.shared-preference.read-write</key>
+	<array>
+		<string>com.opa334.Dopamine</string>
+	</array>
+
+	<key>application-identifier</key>
+	<string>*.com.dyslim.cleaner</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>*</string>
 </dict>
 </plist>

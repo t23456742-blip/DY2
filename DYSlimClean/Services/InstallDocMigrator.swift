@@ -177,33 +177,67 @@ enum AppContainerLocator {
         return roots
     }
 
-    static func containerLooksPopulated(_ url: URL) -> Bool {
+    /// 抖音源容器：必须有 Aweme 实质数据，避免半刷新空壳（仅有 Library/Preferences）抢先命中
+    static func containerLooksLikeAweme(_ url: URL) -> Bool {
         let fm = FileManager.default
-        // 抖音指纹 + 通用沙盒（多闪/红果/皮皮虾等非 Aweme 包也能识别）
         let markers = [
             "Documents/Aweme.db",
             "Documents/mmkv",
             "Documents/_ttinstall_document",
             "Library/Preferences/com.ss.iphone.ugc.Aweme.plist",
-            "Library/Preferences",
-            "Library/Caches",
-            "Documents",
-            "tmp"
+            "Documents/tt_net_config.config"
         ]
-        for rel in markers {
+        return markers.contains { fm.fileExists(atPath: url.appendingPathComponent($0).path) }
+    }
+
+    /// 非抖音目标：有非空 Documents / Library 即可（不要用 Aweme 指纹，避免指回抖音容器）
+    static func containerLooksPopulated(_ url: URL) -> Bool {
+        if containerLooksLikeAweme(url) { return true }
+        let fm = FileManager.default
+        for rel in ["Documents", "Library", "Library/Preferences", "Library/Caches"] {
             let p = url.appendingPathComponent(rel)
-            if fm.fileExists(atPath: p.path) {
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: p.path, isDirectory: &isDir) {
-                    if isDir.boolValue {
-                        if let kids = try? fm.contentsOfDirectory(atPath: p.path), !kids.isEmpty { return true }
-                    } else {
-                        return true
-                    }
-                }
-            }
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: p.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            if let kids = try? fm.contentsOfDirectory(atPath: p.path), !kids.isEmpty { return true }
         }
         return false
+    }
+
+    /// 定位抖音源：优先带 _ttinstall 的真实容器
+    static func locateDouyinSource() -> (bundleID: String, url: URL)? {
+        let bids = douyin.bundleIDs
+        // 1) metadata + Aweme 指纹
+        for bid in bids {
+            if let url = locateViaMetadata(bid), containerLooksLikeAweme(url) { return (bid, url) }
+        }
+        // 2) 指纹扫盘（仅 Aweme）
+        if let url = locateViaMarkers(nil), containerLooksLikeAweme(url) {
+            return (awemeBundleID(from: url) ?? "com.ss.iphone.ugc.Aweme", url)
+        }
+        for bid in bids {
+            if let url = locateViaMarkers(bid), containerLooksLikeAweme(url) { return (bid, url) }
+        }
+        // 3) proxy，但仍要求 Aweme 指纹（拒绝空壳）
+        for bid in bids {
+            if let url = locateViaProxy(bid), containerLooksLikeAweme(url) { return (bid, url) }
+        }
+        // 4) 退而求其次：任意能找到且带 _ttinstall 的
+        for bid in bids {
+            if let hit = locateContainer(bundleIDs: [bid]) {
+                let tt = hit.url.appendingPathComponent("Documents/_ttinstall_document")
+                if FileManager.default.fileExists(atPath: tt.path) { return hit }
+            }
+        }
+        return locateContainer(bundleIDs: bids)
+    }
+
+    private static func awemeBundleID(from url: URL) -> String? {
+        let meta = url.appendingPathComponent(".com.apple.mobile_container_manager.metadata.plist")
+        guard let data = try? Data(contentsOf: meta),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              let id = plist["MCMMetadataIdentifier"] as? String
+        else { return nil }
+        return id
     }
 
     static func locateViaProxy(_ bundleID: String) -> URL? {
@@ -240,11 +274,14 @@ enum AppContainerLocator {
         return nil
     }
 
-    /// 指纹定位（Aweme.db / mmkv / Aweme.plist）
+    /// 指纹定位：仅用于抖音（Aweme）。非 Aweme 目标禁止用 Aweme 指纹，以免指回抖音容器并删源 _ttinstall
     static func locateViaMarkers(_ bundleID: String? = nil) -> URL? {
         let fm = FileManager.default
         let wantAweme = bundleID == nil
             || (bundleID?.caseInsensitiveCompare("com.ss.iphone.ugc.Aweme") == .orderedSame)
+        // 非抖音：只走 metadata / proxy，不用 Aweme 指纹
+        guard wantAweme else { return nil }
+
         for rootPath in applicationDataRoots() {
             let root = URL(fileURLWithPath: rootPath, isDirectory: true)
             guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { continue }
@@ -255,8 +292,6 @@ enum AppContainerLocator {
                        let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
                        let id = plist["MCMMetadataIdentifier"] as? String,
                        id.caseInsensitiveCompare(bundleID) != .orderedSame {
-                        // 有 metadata 且不是目标 bundle → 跳过；无 metadata 时仍可用指纹（仅抖音）
-                        if !wantAweme { continue }
                         continue
                     }
                 }
@@ -264,10 +299,11 @@ enum AppContainerLocator {
                     "Documents/Aweme.db",
                     "Documents/mmkv",
                     "Documents/_ttinstall_document",
-                    "Library/Preferences/com.ss.iphone.ugc.Aweme.plist"
+                    "Library/Preferences/com.ss.iphone.ugc.Aweme.plist",
+                    "Documents/tt_net_config.config"
                 ]
-                for rel in hits where fm.fileExists(atPath: dir.appendingPathComponent(rel).path) {
-                    if wantAweme || bundleID != nil { return dir }
+                if hits.contains(where: { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }) {
+                    return dir
                 }
             }
         }
@@ -302,7 +338,7 @@ enum InstallDocMigrator {
     }
 
     static func migrate(to target: TargetApp) -> Outcome {
-        guard let srcHit = AppContainerLocator.locateContainer(bundleIDs: AppContainerLocator.douyin.bundleIDs) else {
+        guard let srcHit = AppContainerLocator.locateDouyinSource() else {
             return Outcome(ok: false, message: "\(target.title)失败（未找到抖音）")
         }
         let srcDir = srcHit.url.appendingPathComponent(relativeDir, isDirectory: true)
@@ -315,6 +351,11 @@ enum InstallDocMigrator {
             return Outcome(ok: false, message: "\(target.title)失败（未安装或找不到容器 \(ids)）")
         }
 
+        // 防止目标误指回抖音：先删后拷会毁掉源 _ttinstall，导致后续全部失败
+        if dstHit.url.standardizedFileURL.path.caseInsensitiveCompare(srcHit.url.standardizedFileURL.path) == .orderedSame {
+            return Outcome(ok: false, message: "\(target.title)失败（目标与抖音容器相同，跳过）")
+        }
+
         let fm = FileManager.default
         let dstDir = dstHit.url.appendingPathComponent(relativeDir, isDirectory: true)
         do {
@@ -325,7 +366,7 @@ enum InstallDocMigrator {
             try fm.copyItem(at: srcDir, to: dstDir)
             return Outcome(ok: true, message: "\(target.title)成功")
         } catch {
-            return Outcome(ok: false, message: "\(target.title)失败（拷贝错误）")
+            return Outcome(ok: false, message: "\(target.title)失败（拷贝错误：\(error.localizedDescription)）")
         }
     }
 

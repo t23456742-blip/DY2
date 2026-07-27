@@ -82,10 +82,18 @@ enum DouyinAccountQuery {
 
         snap.douyinID = uid ?? "—"
         snap.nickname = nonEmpty(raw.nickname) ?? "—"
-        snap.deviceModel = friendlyDeviceName(nonEmpty(raw.deviceType) ?? "—")
-        // UA 兜底：至少显示 iPhone + 系统版本
-        if snap.deviceModel == "—" {
-            snap.deviceModel = uaFallbackModel(raw: raw)
+        // 优先硬件型号（iPhone14,7）；泛称 "iPhone" 不当最终机型
+        if let hw = preferredHardwareDeviceType(raw.deviceType) {
+            snap.deviceModel = friendlyDeviceName(hw)
+        } else if let uaHW = uaHardwareDeviceType(raw: raw) {
+            snap.deviceModel = friendlyDeviceName(uaHW)
+        } else {
+            let fallback = nonEmpty(raw.deviceType) ?? "—"
+            if isGenericDeviceLabel(fallback) || fallback == "—" {
+                snap.deviceModel = uaFallbackModel(raw: raw)
+            } else {
+                snap.deviceModel = friendlyDeviceName(fallback)
+            }
         }
         snap.osVersion = nonEmpty(raw.osVersion) ?? "—"
         snap.appVersion = nonEmpty(raw.appVersion) ?? "—"
@@ -140,13 +148,15 @@ enum DouyinAccountQuery {
         if raw.registerTimeRaw == nil { raw.registerTimeRaw = acct["register_time"] ?? acct["注册时间"] }
         if raw.token == nil { raw.token = acct["x-tt-token"] }
 
-        // base64 设备 JSON（常见于设备指纹缓存）
+        // base64 设备 JSON（常见于设备指纹缓存）—— 只收硬件型号，避免 "iPhone" 占坑
         for (_, v) in root {
             guard let s = v as? String, s.count > 80 else { continue }
             guard let dec = Data(base64Encoded: s) ?? Data(base64Encoded: s + "=="),
                   let obj = try? JSONSerialization.jsonObject(with: dec) as? [String: Any],
                   obj["device_id"] != nil else { continue }
-            if raw.deviceType == nil { raw.deviceType = obj["device_type"] as? String }
+            if let dt = obj["device_type"] as? String {
+                assignDeviceType(dt, into: &raw)
+            }
             if raw.osVersion == nil { raw.osVersion = obj["os_version"] as? String }
             if raw.appVersion == nil {
                 raw.appVersion = (obj["app_version"] as? String) ?? (obj["version_code"] as? String)
@@ -179,7 +189,7 @@ enum DouyinAccountQuery {
         if raw.deviceID == nil { raw.deviceID = cfg["device_id"] ?? cfg["did"] }
         if raw.installID == nil { raw.installID = cfg["install_id"] ?? cfg["iid"] }
         if raw.cdid == nil { raw.cdid = cfg["cdid"] }
-        if raw.deviceType == nil { raw.deviceType = cfg["device_type"] }
+        if let dt = cfg["device_type"] { assignDeviceType(dt, into: &raw) }
         if raw.osVersion == nil { raw.osVersion = cfg["os_version"] }
         if raw.appVersion == nil {
             raw.appVersion = cfg["version_code"] ?? cfg["app_version"]
@@ -543,6 +553,46 @@ enum DouyinAccountQuery {
             return "\(short)（\(code)）"
         }
         return code
+    }
+
+    /// 硬件型号：iPhone14,7 / iPad13,1 …
+    private static func isHardwareDeviceType(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.range(of: #"^iP(hone|ad|od)\d+,\d+$"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    private static func isGenericDeviceLabel(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty || t.caseInsensitiveCompare("iPhone") == .orderedSame
+            || t.caseInsensitiveCompare("iPad") == .orderedSame
+            || t.caseInsensitiveCompare("iPod") == .orderedSame
+    }
+
+    private static func preferredHardwareDeviceType(_ s: String?) -> String? {
+        guard let s = nonEmpty(s) else { return nil }
+        return isHardwareDeviceType(s) ? s : nil
+    }
+
+    /// 只在空或泛称时写入；硬件型号可覆盖泛称
+    private static func assignDeviceType(_ value: String, into raw: inout Raw) {
+        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !v.isEmpty else { return }
+        if isHardwareDeviceType(v) {
+            if raw.deviceType == nil || isGenericDeviceLabel(raw.deviceType ?? "") || !isHardwareDeviceType(raw.deviceType ?? "") {
+                raw.deviceType = v
+            }
+            return
+        }
+        if raw.deviceType == nil {
+            raw.deviceType = v
+        }
+    }
+
+    /// 从 UA 尝试抠硬件型号（少见）；多数 UA 只有 iPhone OS
+    private static func uaHardwareDeviceType(raw: Raw) -> String? {
+        // 预留：当前抖音 UA 通常无 iPhone14,7；硬件主要靠 tt_net / session_url
+        _ = raw
+        return nil
     }
 
     private static func nonEmpty(_ s: String?) -> String? {

@@ -92,12 +92,25 @@ enum AwemeTTNetConfig {
                 if extras[fk] == nil { extras[fk] = qv }
             }
         }
-        for (k, v) in extras where cfg[k] == nil {
-            cfg[k] = v
+        for (k, v) in extras {
+            // session_url 里的硬件型号可覆盖泛称 "iPhone"
+            if k == "device_type" || k.hasSuffix("device_type") {
+                let cur = cfg["device_type"]
+                if cur == nil || isGenericDeviceLabel(cur ?? "") {
+                    cfg["device_type"] = v
+                }
+                continue
+            }
+            if cfg[k] == nil { cfg[k] = v }
         }
         // 后缀回填
         for (k, v) in cfg {
-            if k.hasSuffix("device_type"), cfg["device_type"] == nil { cfg["device_type"] = v }
+            if k.hasSuffix("device_type") {
+                let cur = cfg["device_type"]
+                if cur == nil || isGenericDeviceLabel(cur ?? "") {
+                    cfg["device_type"] = v
+                }
+            }
             if k.hasSuffix("os_version"), cfg["os_version"] == nil { cfg["os_version"] = v }
             if k.hasSuffix("version_code"), cfg["version_code"] == nil { cfg["version_code"] = v }
             if k.hasSuffix("install_id"), cfg["install_id"] == nil { cfg["install_id"] = v }
@@ -105,6 +118,13 @@ enum AwemeTTNetConfig {
             if k.hasSuffix("cdid"), cfg["cdid"] == nil { cfg["cdid"] = v }
             if k.hasSuffix("build_number"), cfg["build_number"] == nil { cfg["build_number"] = v }
         }
+    }
+
+    private static func isGenericDeviceLabel(_ s: String) -> Bool {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty || t.caseInsensitiveCompare("iPhone") == .orderedSame
+            || t.caseInsensitiveCompare("iPad") == .orderedSame
+            || t.caseInsensitiveCompare("iPod") == .orderedSame
     }
 
     private static func normalizeAliases(_ cfg: inout [String: String]) {

@@ -7,6 +7,11 @@ struct RuleNode: Identifiable, Hashable {
     let isDirectory: Bool
     let depth: Int
     var hint: String?
+    var sizeBytes: Int64 = 0
+
+    var sizeText: String {
+        sizeBytes > 0 ? ContainerDiskSize.format(sizeBytes) : "—"
+    }
 }
 
 @MainActor
@@ -28,18 +33,62 @@ final class RulesViewModel: ObservableObject {
     private var childrenCache: [String: [RuleNode]] = [:]
 
     private static let folderHints: [String: String] = [
-        "Documents": "用户文档/数据库/mmkv 等",
-        "Library": "缓存、偏好设置、资源",
-        "tmp": "临时文件，精简时通常可删",
-        "Documents/mmkv": "关键配置存储，商城相关强制保留",
-        "Documents/_ttinstall_document": "安装票据，强制保留不可取消",
-        "Documents/_bdticketguard_document": "票据防护，默认保留",
-        "Library/Preferences": "偏好设置，移机/粘贴相关，默认保留",
-        "Library/Caches": "缓存目录；商城 aweecom / WebKit 子树强制保留",
-        "Library/Application Support": "商城 gurd/gecko/电商资源，强制保留",
-        "Library/Pitaya": "商城/搜索包，强制保留",
-        "Library/WebKit": "商城 H5/搜索 WebView，强制保留",
-        "Library/AWEIMRoot": "私信/表情等资源"
+        // 顶层（对齐雷神/雷蛇备份包：Documents / Library / tmp）
+        "Documents": "账号库、mmkv、安装票据、特效等业务数据",
+        "Library": "登录态、IM、商城资源、缓存、偏好设置（体积通常最大）",
+        "tmp": "临时文件；精简时通常可删",
+        // Documents 关键
+        "Documents/_ttinstall_document": "安装票据 · 强制保留，迁移/登录依赖",
+        "Documents/_bdticketguard_document": "票据防护 · 默认保留",
+        "Documents/mmkv": "键值配置（登录/商城/首页等）· 商城相关强制保留",
+        "Documents/Aweme.db": "抖音主库 · 账号与业务核心",
+        "Documents/tt_net_config.config": "网络/设备参数（did/iid/机型）· 查询提参用",
+        "Documents/ttaccountSDKUserInfo.archiver": "账号归档 · 登录态",
+        "Documents/ttaccount_token_guard_data.archiver": "Token 防护归档",
+        "Documents/com.bytedance.ies": "IES 配置 · 默认保留",
+        "Documents/com.bytedance.ies-effects": "特效资源 · 体积大，可精简",
+        "Documents/com.bytedance.ies-effects-cache": "特效缓存 · 可删",
+        "Documents/AWEIMRoot": "私信资源（表情/用户）· 体积大",
+        "Documents/FeedbackRecorder": "反馈录音 · 默认可留",
+        "Documents/IESPlayTimePredictModel": "播放预测模型 · 小，可留",
+        "Documents/IESMLModelsPackage": "机器学习模型包 · 可精简",
+        "Documents/homepage": "首页缓存 · 可删",
+        "Documents/edge": "边缘计算缓存 · 可删",
+        "Documents/applog.tttracker": "埋点日志 · 可删",
+        "Documents/bd.turing": "图灵活体/风控模型 · 可精简",
+        "Documents/AWEDanmakuResourceRootFolder": "弹幕资源 · 可删",
+        "Documents/TIMXSDKWorkplace": "TIM 即时通讯工作区",
+        "Documents/IMFTS": "私信全文检索索引",
+        "Documents/hostcache_sync_v1": "域名/主机缓存",
+        "Documents/server.json": "服务端配置缓存",
+        "Documents/DBWorkspace": "DB 工作区",
+        // Library 关键（备份包里最大头多在这里）
+        "Library/Preferences": "偏好设置 · 移机/粘贴相关，默认保留",
+        "Library/Caches": "通用缓存；商城 aweecom / WebKit 子树强制保留",
+        "Library/Application Support": "商城 gurd/gecko/电商资源 · 体积最大头，关键子树强制保留",
+        "Library/Application Support/gurd_cache": "Gurd 动态资源 · 商城依赖，强制保留",
+        "Library/Pitaya": "商城/搜索包 · 强制保留",
+        "Library/WebKit": "商城 H5 / 搜索 WebView · 强制保留",
+        "Library/AWEIMRoot": "私信贴纸与用户资源",
+        "Library/AWEStorage": "UnifyStorage 登录与业务库 · 体积大，默认保留",
+        "Library/HTTPStorages": "HTTP 存储/Cookie · 默认保留",
+        "Library/SyncedPreferences": "同步偏好 · 默认保留",
+        "Library/passportStorage": "通行证/登录凭证存储",
+        "Library/alog": "本地日志 · 可删",
+        "Library/Heimdallr": "监控/崩溃采集 · 可删",
+        "Library/tma": "小程序/容器缓存 · 可精简",
+        "Library/Jato": "Jato 组件缓存 · 可精简",
+        "Library/SplashBoard": "启动图缓存 · 可删",
+        "Library/AWEOfflineCenter": "离线中心缓存 · 可删",
+        "Library/AWEFeedCacheData": "信息流缓存 · 可删",
+        "Library/AWEResource": "通用资源包 · 可精简",
+        "Library/AWEFileKit": "文件工具缓存 · 可精简",
+        "Library/PIAMMKV": "PIA MMKV · 可精简",
+        "Library/unisus": "unisus 缓存 · 可精简",
+        "Library/Cookies": "Cookie 存储",
+        "Library/loginData.dat": "登录数据文件 · 默认保留",
+        "Library/Better": "Better 组件数据",
+        "tmp/AWEIMRoot": "临时私信资源 · 可删"
     ]
 
     func bootstrap() {
@@ -302,17 +351,23 @@ final class RulesViewModel: ObservableObject {
             if name == ".com.apple.mobile_container_manager.metadata.plist" { continue }
             let rel = relativeParent.isEmpty ? name : relativeParent + "/" + name
             var isDir: ObjCBool = false
-            fm.fileExists(atPath: dirURL.appendingPathComponent(name).path, isDirectory: &isDir)
+            let childURL = dirURL.appendingPathComponent(name)
+            fm.fileExists(atPath: childURL.path, isDirectory: &isDir)
+            let size = isDir.boolValue
+                ? ContainerDiskSize.byteSize(of: childURL, budget: depth <= 1 ? 40_000 : 12_000)
+                : ((try? fm.attributesOfItem(atPath: childURL.path))?[.size] as? NSNumber)?.int64Value ?? 0
             nodes.append(RuleNode(
                 id: rel,
                 name: name,
                 isDirectory: isDir.boolValue,
                 depth: depth,
-                hint: hints[rel] ?? hints[name]
+                hint: hints[rel] ?? hints[name],
+                sizeBytes: size
             ))
         }
         nodes.sort { a, b in
             if a.isDirectory != b.isDirectory { return a.isDirectory && !b.isDirectory }
+            if a.sizeBytes != b.sizeBytes { return a.sizeBytes > b.sizeBytes }
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         }
         return nodes

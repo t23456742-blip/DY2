@@ -233,10 +233,9 @@ final class SlimCleaner: @unchecked Sendable {
     func locateAwemeContainer() -> URL? {
         // 半刷新后系统可能指向「空新容器」，真数据还在孤儿目录。
         // 优先返回带抖音数据指纹的目录，再退回系统 proxy。
-        // 固定扫 /var/mobile/Containers/Data/Application（及 private / jbroot）
-        if let url = AppContainerLocator.locateViaMarkers(Self.awemeBundleID), containerLooksPopulated(url) { return url }
-        if let url = AppContainerLocator.locateViaMetadata(Self.awemeBundleID), containerLooksPopulated(url) { return url }
-        if let url = locateViaApplicationProxy(), containerLooksPopulated(url) { return url }
+        if let url = AppContainerLocator.locateViaMarkers(Self.awemeBundleID), AppContainerLocator.containerLooksLikeAweme(url) { return url }
+        if let url = AppContainerLocator.locateViaMetadata(Self.awemeBundleID), AppContainerLocator.containerLooksLikeAweme(url) { return url }
+        if let url = locateViaApplicationProxy(), AppContainerLocator.containerLooksLikeAweme(url) { return url }
         if let url = AppContainerLocator.locateViaMarkers(Self.awemeBundleID) { return url }
         if let url = AppContainerLocator.locateViaMetadata(Self.awemeBundleID) { return url }
         return locateViaApplicationProxy()
@@ -279,27 +278,39 @@ final class SlimCleaner: @unchecked Sendable {
                 toFat: fat
             )
             if let fixed = locateAwemeContainer(), containerLooksPopulated(fixed) {
-                result.container = fixed
+                return scan(container: fixed)
             } else {
-                result.container = fat
+                return scan(container: fat)
             }
-        } else {
-            result.container = container
         }
+        return scan(container: container)
+    }
 
-        let scanRoot = result.container ?? container
+    /// 扫描指定容器（本机 / 雷神 / 雷蛇备份包内的 Aweme 根）
+    func scan(container: URL) -> ScanResult {
+        var result = ScanResult()
+        if keepList.isEmpty {
+            result.error = "白名单文件未打进软件包，请重新编译安装"
+            return result
+        }
+        guard FileManager.default.fileExists(atPath: container.path) else {
+            result.error = "容器路径不存在"
+            return result
+        }
+        result.container = container
+
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
-            at: scanRoot,
+            at: container,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey, .isDirectoryKey],
             options: [],
             errorHandler: { _, _ in true }
         ) else {
-            result.error = "无法读取抖音容器（权限不足，请确认已用巨魔安装）"
+            result.error = "无法读取容器（权限不足）"
             return result
         }
 
-        let containerPath = scanRoot.standardizedFileURL.path
+        let containerPath = container.standardizedFileURL.path
         while let item = enumerator.nextObject() as? URL {
             let values = try? item.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
             if values?.isDirectory == true { continue }
@@ -326,17 +337,18 @@ final class SlimCleaner: @unchecked Sendable {
         return result
     }
 
-    func delete(urls: [URL]) -> DeleteSummary {
+    func delete(urls: [URL], relativeTo container: URL? = nil) -> DeleteSummary {
         var summary = DeleteSummary()
         let fm = FileManager.default
+        let root = container ?? locateAwemeContainer()
         for url in urls {
             if Self.protectedNames.contains(url.lastPathComponent) {
                 summary.failed += 1
                 continue
             }
-            // 双重保险：删除前再判一次保留规则
-            if let container = locateAwemeContainer() {
-                let containerPath = container.standardizedFileURL.path
+            // 双重保险：删除前再判一次保留规则（支持备份包容器）
+            if let root {
+                let containerPath = root.standardizedFileURL.path
                 let full = url.standardizedFileURL.path
                 if full.hasPrefix(containerPath) {
                     var rel = String(full.dropFirst(containerPath.count))
@@ -371,9 +383,9 @@ final class SlimCleaner: @unchecked Sendable {
                 }
             }
         }
-        // Prune empty directories under Documents/Library/tmp (not in keep list as files)
-        if let container = locateAwemeContainer() {
-            pruneEmptyDirs(under: container)
+        // Prune empty directories under Documents/Library/tmp
+        if let root {
+            pruneEmptyDirs(under: root)
         }
         return summary
     }
