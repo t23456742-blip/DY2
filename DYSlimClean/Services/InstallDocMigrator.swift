@@ -69,6 +69,7 @@ enum AppContainerLocator {
             id: "duoshan",
             title: "多闪",
             bundleIDs: [
+                "my.maya.iphone",
                 "com.ss.iphone.ugc.Duoshan",
                 "com.ss.iphone.ugc.duoshan",
                 "com.bytedance.ies.ugc.duoshan"
@@ -81,6 +82,22 @@ enum AppContainerLocator {
                 "com.dragon.read",
                 "com.bytedance.novel",
                 "com.ss.iphone.article.novel"
+            ]
+        ),
+        TargetApp(
+            id: "hongguo",
+            title: "红果",
+            bundleIDs: [
+                "com.phoenix.read.iphone",
+                "com.phoenix.read"
+            ]
+        ),
+        TargetApp(
+            id: "pipixia",
+            title: "皮皮虾",
+            bundleIDs: [
+                "com.sup.iphone.superb",
+                "com.sup.android.superb"
             ]
         ),
         TargetApp(
@@ -162,13 +179,16 @@ enum AppContainerLocator {
 
     static func containerLooksPopulated(_ url: URL) -> Bool {
         let fm = FileManager.default
+        // 抖音指纹 + 通用沙盒（多闪/红果/皮皮虾等非 Aweme 包也能识别）
         let markers = [
             "Documents/Aweme.db",
             "Documents/mmkv",
             "Documents/_ttinstall_document",
             "Library/Preferences/com.ss.iphone.ugc.Aweme.plist",
             "Library/Preferences",
-            "Library/Caches"
+            "Library/Caches",
+            "Documents",
+            "tmp"
         ]
         for rel in markers {
             let p = url.appendingPathComponent(rel)
@@ -283,15 +303,16 @@ enum InstallDocMigrator {
 
     static func migrate(to target: TargetApp) -> Outcome {
         guard let srcHit = AppContainerLocator.locateContainer(bundleIDs: AppContainerLocator.douyin.bundleIDs) else {
-            return Outcome(ok: false, message: "\(target.title)失败")
+            return Outcome(ok: false, message: "\(target.title)失败（未找到抖音）")
         }
         let srcDir = srcHit.url.appendingPathComponent(relativeDir, isDirectory: true)
         guard FileManager.default.fileExists(atPath: srcDir.path) else {
-            return Outcome(ok: false, message: "\(target.title)失败")
+            return Outcome(ok: false, message: "\(target.title)失败（抖音无_ttinstall）")
         }
 
         guard let dstHit = AppContainerLocator.locateContainer(bundleIDs: target.bundleIDs) else {
-            return Outcome(ok: false, message: "\(target.title)失败")
+            let ids = target.bundleIDs.prefix(2).joined(separator: "/")
+            return Outcome(ok: false, message: "\(target.title)失败（未安装或找不到容器 \(ids)）")
         }
 
         let fm = FileManager.default
@@ -304,7 +325,7 @@ enum InstallDocMigrator {
             try fm.copyItem(at: srcDir, to: dstDir)
             return Outcome(ok: true, message: "\(target.title)成功")
         } catch {
-            return Outcome(ok: false, message: "\(target.title)失败")
+            return Outcome(ok: false, message: "\(target.title)失败（拷贝错误）")
         }
     }
 

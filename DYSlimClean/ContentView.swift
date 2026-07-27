@@ -21,6 +21,7 @@ struct ContentView: View {
                     statusCard
                     accountQueryCard
                     thorBackupCard
+                    razerBackupCard
                     migrateCard
                     sizeCompareCard
                     statsRow
@@ -112,6 +113,11 @@ struct ContentView: View {
             Button("好的", role: .cancel) {}
         } message: {
             Text(model.thorExtractText)
+        }
+        .alert("雷蛇备份提参", isPresented: $model.showRazerExtractResult) {
+            Button("好的", role: .cancel) {}
+        } message: {
+            Text(model.razerExtractText)
         }
     }
 
@@ -316,7 +322,7 @@ struct ContentView: View {
             }
 
             if model.thorBackups.isEmpty {
-                Text("未找到雷神备份列表")
+                Text("未安装")
                     .font(.caption)
                     .foregroundColor(.orange)
             } else {
@@ -365,12 +371,77 @@ struct ContentView: View {
         }
     }
 
+    private var razerBackupCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            razerBackupHeader
+
+            if !model.razerQueryRows.isEmpty {
+                Text("查询详情")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Color(red: 0.45, green: 0.85, blue: 0.55).opacity(0.95))
+                queryRowsView(model.razerQueryRows)
+            }
+
+            if !model.razerInstalled {
+                Text("未安装")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            } else if model.razerBackups.isEmpty {
+                Text("暂无备份包")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            } else {
+                Text("备份包 \(model.razerBackups.count)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Color(red: 0.45, green: 0.85, blue: 0.55).opacity(0.95))
+                VStack(spacing: 8) {
+                    ForEach(model.razerBackups) { entry in
+                        RazerBackupRowView(
+                            entry: entry,
+                            busy: model.isBusy,
+                            onQuery: { model.queryFromRazerBackup(entry) },
+                            onExtract: { model.extractFromRazerBackup(entry) }
+                        )
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(card)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color(red: 0.45, green: 0.85, blue: 0.55).opacity(0.28), lineWidth: 1)
+        )
+    }
+
+    private var razerBackupHeader: some View {
+        HStack {
+            Text("雷蛇备份查询")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.9))
+            Spacer()
+            Button {
+                model.reloadRazerBackups()
+            } label: {
+                Text("刷新")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(accent.opacity(0.18))
+                    .foregroundColor(accent)
+                    .clipShape(Capsule())
+            }
+            .disabled(model.isBusy)
+        }
+    }
+
     private var migrateCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("一键迁移")
                 .font(.subheadline.weight(.semibold))
                 .foregroundColor(.white.opacity(0.9))
-            Text("极速版 / 火山版 / 商城 / 抖省省 / 头条 / 多闪 / 番茄小说 / 随变 / 精选 / 汽水 / 西瓜 / AI抖音")
+            Text("极速版 / 火山版 / 商城 / 抖省省 / 头条 / 多闪 / 番茄 / 红果 / 皮皮虾 / 随变 / 精选 / 汽水 / 西瓜 / AI抖音")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
 
@@ -804,6 +875,82 @@ private struct ThorBackupRowView: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
                 Text(entry.password.isEmpty ? "无密码" : entry.password)
+                    .font(.caption2)
+                    .foregroundColor(.white.opacity(0.55))
+                    .lineLimit(1)
+                if !entry.queryStatus.isEmpty || !entry.queryOnline.isEmpty {
+                    HStack(spacing: 10) {
+                        Text("状态 \(entry.queryStatus.isEmpty ? "—" : entry.queryStatus)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(statusColor(entry.queryStatus))
+                        Text("在线 \(entry.queryOnline.isEmpty ? "—" : entry.queryOnline)")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(onlineColor(entry.queryOnline))
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onQuery) {
+                Text("查询")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.35, green: 0.55, blue: 1.0))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+
+            Button(action: onExtract) {
+                Text("提参")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.95, green: 0.45, blue: 0.35))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+        }
+        .padding(10)
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private func statusColor(_ s: String) -> Color {
+        switch s {
+        case "正常": return Color(red: 0.3, green: 0.85, blue: 0.45)
+        case "封禁", "违规", "禁言": return Color.orange
+        case "参数非法", "无数据", "查询失败": return Color.red.opacity(0.85)
+        default: return .white.opacity(0.7)
+        }
+    }
+
+    private func onlineColor(_ s: String) -> Color {
+        switch s {
+        case "是": return Color(red: 0.3, green: 0.85, blue: 0.45)
+        case "否": return Color.red.opacity(0.85)
+        default: return .white.opacity(0.55)
+        }
+    }
+}
+
+/// 雷蛇备份行：包名 / 抖音号，查询后显示状态/在线
+private struct RazerBackupRowView: View {
+    let entry: RazerBackupIndex.Entry
+    let busy: Bool
+    let onQuery: () -> Void
+    let onExtract: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.listTitle)
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                Text(entry.listSubtitle)
                     .font(.caption2)
                     .foregroundColor(.white.opacity(0.55))
                     .lineLimit(1)

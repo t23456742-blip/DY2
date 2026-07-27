@@ -62,6 +62,14 @@ final class CleanViewModel: ObservableObject {
     @Published var thorBackups: [ThorBackupIndex.Entry] = []
     @Published var showThorExtractResult = false
     @Published var thorExtractText = ""
+    /// 雷蛇 RAZER 备份
+    @Published var razerBackups: [RazerBackupIndex.Entry] = []
+    @Published var razerInstalled = false
+    @Published var razerQueryRows: [(String, String)] = []
+    @Published var razerQuerySource = ""
+    @Published var razerQueryText = ""
+    @Published var showRazerExtractResult = false
+    @Published var razerExtractText = ""
     @Published var shellPath: String = UserDefaults.standard.string(forKey: "dyshell.path")
         ?? "/var/mobile/Media/dyclean.sh"
     @Published var showShellResult = false
@@ -94,16 +102,30 @@ final class CleanViewModel: ObservableObject {
         log("已加载白名单 \(keepCount) 条")
         refreshLocatedContainer()
         reloadThorBackups()
+        reloadRazerBackups()
     }
 
     func reloadThorBackups() {
         let list = ThorBackupIndex.load()
         thorBackups = list
         if list.isEmpty {
-            log("雷神备份：未找到 backup_index（优先 /private/var/mobile/Media/Thor/Backups/backup_index.plist）")
+            log("雷神备份：未安装")
         } else {
             let src = list.first?.indexSource ?? ""
             log("雷神备份：\(list.count) 条 · 索引 \(src)")
+        }
+    }
+
+    func reloadRazerBackups() {
+        razerInstalled = RazerBackupIndex.isInstalled()
+        let list = RazerBackupIndex.load()
+        razerBackups = list
+        if !razerInstalled {
+            log("雷蛇备份：未安装（无 /private/var/mobile/Media/RAZER）")
+        } else if list.isEmpty {
+            log("雷蛇备份：已安装，暂无含 Aweme 的备份包")
+        } else {
+            log("雷蛇备份：\(list.count) 包 · /private/var/mobile/Media/RAZER")
         }
     }
 
@@ -176,6 +198,82 @@ final class CleanViewModel: ObservableObject {
         guard let i = thorBackups.firstIndex(where: { $0.id == id }) else { return }
         thorBackups[i].queryStatus = status
         thorBackups[i].queryOnline = online
+    }
+
+    /// 雷蛇备份包提参：`{RAZER}/{stamp}/com.ss.iphone.ugc.Aweme`
+    func extractFromRazerBackup(_ entry: RazerBackupIndex.Entry) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "雷蛇提参…"
+        let pack = entry.displayPath
+        log("雷蛇备份提参：\(entry.name)\n\(pack)/com.ss.iphone.ugc.Aweme")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: pack) else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.razerExtractText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n包名：\(entry.name)\n\(pack)"
+                    self.showRazerExtractResult = true
+                    self.log(self.razerExtractText)
+                }
+                return
+            }
+            let r = DouyinParamExtractor.extractAndSave(cleaner: cleaner, container: root)
+            await MainActor.run {
+                self.isBusy = false
+                self.razerExtractText = "包名：\(entry.name)\n来源：\(root.path)\n\(r.message)"
+                self.showRazerExtractResult = true
+                self.paramExtractText = self.razerExtractText
+                self.showParamExtractResult = true
+                self.log(self.razerExtractText)
+            }
+        }
+    }
+
+    /// 雷蛇备份查询：详情在卡片上方，状态/在线/抖音号写回列表
+    func queryFromRazerBackup(_ entry: RazerBackupIndex.Entry) {
+        guard !isBusy else { return }
+        isBusy = true
+        busyText = "雷蛇查询…"
+        let pack = entry.displayPath
+        let entryID = entry.id
+        log("【雷蛇备份查询】\(entry.name)")
+        Task.detached(priority: .userInitiated) { [cleaner] in
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: pack) else {
+                await MainActor.run {
+                    self.isBusy = false
+                    self.razerQuerySource = ""
+                    self.razerQueryRows = [
+                        ("备份包", entry.name),
+                        ("状态", "无数据"),
+                        ("是否在线", "—")
+                    ]
+                    self.patchRazerRow(id: entryID, status: "无数据", online: "—", account: "")
+                    self.log("雷蛇包内未找到 Aweme：\(entry.name)")
+                }
+                return
+            }
+            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: root)
+            await MainActor.run {
+                self.isBusy = false
+                self.razerQuerySource = ""
+                var rows = Self.displayQueryRows(from: snap)
+                rows.insert(("备份包", entry.name), at: 0)
+                self.razerQueryRows = rows
+                self.razerQueryText = snap.message
+                let acct = (snap.douyinID == "—" || snap.douyinID.isEmpty) ? "" : snap.douyinID
+                self.patchRazerRow(id: entryID, status: snap.status, online: snap.online, account: acct)
+                self.log(snap.message)
+            }
+        }
+    }
+
+    private func patchRazerRow(id: String, status: String, online: String, account: String) {
+        guard let i = razerBackups.firstIndex(where: { $0.id == id }) else { return }
+        razerBackups[i].queryStatus = status
+        razerBackups[i].queryOnline = online
+        if !account.isEmpty {
+            razerBackups[i].queryAccount = account
+        }
     }
 
     /// 详情只保留业务字段，去掉路径/来源
@@ -637,6 +735,7 @@ final class CleanViewModel: ObservableObject {
         let p = path.lowercased()
         if p.contains("/containers/data/application/") { return true }
         if p.contains("/thor/backups/") || p.contains("/media/thor/") { return false }
+        if p.contains("/media/razer/") { return false }
         return false
     }
 
