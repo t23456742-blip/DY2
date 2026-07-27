@@ -16,6 +16,9 @@ enum ThorBackupIndex {
         var appNames: [String]
         var sizeBytes: Int64
         var indexSource: String
+        /// 查询后写回列表（状态 / 是否在线）
+        var queryStatus: String = ""
+        var queryOnline: String = ""
 
         var sizeText: String {
             sizeBytes > 0 ? ContainerDiskSize.format(sizeBytes) : "—"
@@ -23,6 +26,24 @@ enum ThorBackupIndex {
 
         var displayPath: String {
             resolvedPath.isEmpty ? folderPath : resolvedPath
+        }
+
+        /// 备注里的账号（抖音号-密码 → 前半）
+        var account: String {
+            guard let i = name.firstIndex(of: "-") else { return name }
+            let a = String(name[..<i]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return a.isEmpty ? name : a
+        }
+
+        /// 备注里的密码（抖音号-密码 → 后半）
+        var password: String {
+            guard let i = name.firstIndex(of: "-") else { return "" }
+            return String(name[name.index(after: i)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        var accountPasswordText: String {
+            let pwd = password
+            return pwd.isEmpty ? account : "\(account)  ·  \(pwd)"
         }
     }
 

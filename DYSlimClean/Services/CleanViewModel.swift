@@ -136,40 +136,62 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 雷神备份查询：只读 Backups 包内 Aweme，结果写到「雷神备份」卡片（不覆盖本机查询）
+    /// 雷神备份查询：结果详情在卡片上方，状态/在线写回列表行
     func queryFromThorBackup(_ entry: ThorBackupIndex.Entry) {
         guard !isBusy else { return }
         isBusy = true
         busyText = "备份查询…"
         let pack = entry.displayPath
-        log("【雷神备份查询】\(entry.name)\n索引：/private/var/mobile/Media/Thor/Backups/backup_index.plist\n包：\(pack)/com.ss.iphone.ugc.Aweme")
+        let entryID = entry.id
+        log("【雷神备份查询】\(entry.accountPasswordText)")
         Task.detached(priority: .userInitiated) { [cleaner] in
             guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: pack) else {
                 await MainActor.run {
                     self.isBusy = false
-                    self.thorQuerySource = "雷神备份 · \(entry.name)（未找到 Aweme）"
-                    self.thorQueryRows = [("来源", "雷神备份包"), ("路径", pack)]
-                    self.thorQueryText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n\(pack)"
-                    self.log(self.thorQueryText)
+                    self.thorQuerySource = ""
+                    self.thorQueryRows = [
+                        ("账号", entry.account),
+                        ("密码", entry.password.isEmpty ? "—" : entry.password),
+                        ("状态", "无数据"),
+                        ("是否在线", "—")
+                    ]
+                    self.patchThorRow(id: entryID, status: "无数据", online: "—")
+                    self.log("备份包内未找到 Aweme：\(entry.name)")
                 }
                 return
             }
             let snap = DouyinAccountQuery.query(cleaner: cleaner, container: root)
             await MainActor.run {
                 self.isBusy = false
-                self.thorQuerySource = "雷神备份 · \(entry.name)\n\(root.path)"
-                var rows: [(String, String)] = [
-                    ("来源", "雷神备份包"),
-                    ("备注", entry.name),
-                    ("备份目录", pack)
-                ]
-                rows.append(contentsOf: snap.rows)
-                self.thorQueryRows = rows
-                self.thorQueryText = "\(self.thorQuerySource)\n\n\(snap.message)"
-                self.log(self.thorQuerySource)
+                self.thorQuerySource = ""
+                self.thorQueryRows = Self.displayQueryRows(from: snap, account: entry.account, password: entry.password)
+                self.thorQueryText = snap.message
+                self.patchThorRow(id: entryID, status: snap.status, online: snap.online)
                 self.log(snap.message)
             }
         }
+    }
+
+    private func patchThorRow(id: String, status: String, online: String) {
+        guard let i = thorBackups.firstIndex(where: { $0.id == id }) else { return }
+        thorBackups[i].queryStatus = status
+        thorBackups[i].queryOnline = online
+    }
+
+    /// 详情只保留业务字段，去掉路径/来源
+    private static func displayQueryRows(
+        from snap: DouyinAccountQuery.Snapshot,
+        account: String? = nil,
+        password: String? = nil
+    ) -> [(String, String)] {
+        var rows: [(String, String)] = []
+        if let account, !account.isEmpty { rows.append(("账号", account)) }
+        if let password, !password.isEmpty { rows.append(("密码", password)) }
+        let skip: Set<String> = ["来源", "容器", "备份目录", "路径", "备注"]
+        for (k, v) in snap.rows where !skip.contains(k) {
+            rows.append((k, v))
+        }
+        return rows
     }
 
     /// 刷新已定位容器路径 + 数据体积（仅本机 Application）
@@ -582,21 +604,17 @@ final class CleanViewModel: ObservableObject {
             let snap = DouyinAccountQuery.query(cleaner: cleaner, container: container)
             await MainActor.run {
                 self.isBusy = false
-                var rows: [(String, String)] = [("来源", "本机容器")]
+                self.accountQuerySource = ""
+                self.accountQueryRows = Self.displayQueryRows(from: snap)
+                self.accountQueryText = snap.message
+                self.showAccountQueryResult = true
                 if let p = container?.path {
-                    rows.append(("容器", p))
                     self.containerPath = p
                     self.containerFound = true
                 }
-                rows.append(contentsOf: snap.rows)
-                self.accountQueryRows = rows
-                self.accountQueryText = snap.message
-                self.showAccountQueryResult = true
-                self.accountQuerySource = container.map { "本机 · Application\n\($0.path)" } ?? "本机 · 未找到 Application 容器"
                 if container == nil {
                     self.log(cleaner.locateAwemeDiagnostics())
                 }
-                self.log(snap.detail)
                 self.log(snap.message)
                 self.log(snap.ok ? "本机查询完成" : "本机查询完成（信息不完整）")
             }
