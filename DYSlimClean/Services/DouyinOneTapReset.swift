@@ -531,10 +531,10 @@ enum DouyinOneTapReset {
 
     // MARK: - 2 清钥匙串
 
-    /// 对齐 Fuck：`cleanKeychainForBundleId:` —— SecItem 删除；n==0 时诚实报失败感（权限/本就空）
+    /// 清钥匙串：SecItem + 直接改系统 `/var/Keychains/keychain-2.db`（工具箱/雷神同路径）
     private static func clearKeychain(bundleID: String) -> StepResult {
         let name = "清钥匙串"
-        let before = countKeychainItems(bundleID: bundleID)
+        let beforeSec = countKeychainItems(bundleID: bundleID)
         let classes: [CFString] = [
             kSecClassGenericPassword,
             kSecClassInternetPassword,
@@ -548,34 +548,128 @@ enum DouyinOneTapReset {
             deleted += deleteKeychainItems(secClass: secClass, bundleID: bundleID)
         }
 
-        // 再按 AccessGroup = TeamID.bundle 强删一轮（设备指纹常挂这里）
         for team in ["UGCRJ42T19", "3JTPEA4UU7", ""] {
             let agrp = team.isEmpty ? bundleID : "\(team).\(bundleID)"
             for secClass in classes {
-                let q: [String: Any] = [
+                var q: [String: Any] = [
                     kSecClass as String: secClass,
-                    kSecAttrAccessGroup as String: agrp
+                    kSecAttrAccessGroup as String: agrp,
+                    kSecAttrSynchronizable as String: kSecAttrSynchronizableAny
                 ]
+                if SecItemDelete(q as CFDictionary) == errSecSuccess { deleted += 1 }
+                q.removeValue(forKey: kSecAttrSynchronizable as String)
                 if SecItemDelete(q as CFDictionary) == errSecSuccess { deleted += 1 }
             }
         }
 
-        let after = countKeychainItems(bundleID: bundleID)
-        if deleted > 0 || after < before {
+        // 关键：直接清系统钥匙串库（SecItem 常枚举到 0，但库里有 agrp 行）
+        let dbWipe = wipeKeychainDatabase(bundleID: bundleID)
+        let afterSec = countKeychainItems(bundleID: bundleID)
+
+        if dbWipe.deleted > 0 || deleted > 0 || afterSec < beforeSec {
+            var detail = "SecItem 删 \(deleted) · 库删 \(dbWipe.deleted) 行 · 前 \(beforeSec) → 后 \(afterSec)"
+            if !dbWipe.path.isEmpty { detail += "\n\(dbWipe.path)" }
+            return .init(name: name, ok: true, detail: detail)
+        }
+        if beforeSec == 0 && dbWipe.deleted == 0 {
+            let pathTip = dbWipe.path.isEmpty ? "未找到 keychain-2.db" : "库：\(dbWipe.path)（0 行匹配）"
             return .init(
                 name: name,
-                ok: true,
-                detail: "已删 \(max(deleted, before - after)) 项 · 前 \(before) → 后 \(after)"
+                ok: false,
+                detail: "SecItem=0 且库未删到行。\(pathTip)\n请确认 tipa 含 keychain-access-groups 且已巨魔重装"
             )
-        }
-        if before == 0 {
-            return .init(name: name, ok: true, detail: "当前 0 项（本就为空或无权枚举）")
         }
         return .init(
             name: name,
             ok: false,
-            detail: "仍有 \(after) 项未删掉（SecItem 权限可能未生效，检查 tipa entitlements）"
+            detail: "仍有 \(afterSec) 项未删掉"
         )
+    }
+
+    private struct KeychainDBWipe {
+        var deleted: Int
+        var path: String
+    }
+
+    /// 系统钥匙串路径（雷神/雷蛇备份的 Keychains/ 即来自此）
+    private static func keychainDBCandidates() -> [String] {
+        [
+            "/private/var/Keychains/keychain-2.db",
+            "/var/Keychains/keychain-2.db",
+            "/private/var/mobile/Library/Keychains/keychain-2.db",
+            "/var/mobile/Library/Keychains/keychain-2.db"
+        ]
+    }
+
+    private static func wipeKeychainDatabase(bundleID: String) -> KeychainDBWipe {
+        let fm = FileManager.default
+        let needles = [
+            bundleID,
+            "com.ss.iphone.ugc.Aweme",
+            "UGCRJ42T19.\(bundleID)",
+            "3JTPEA4UU7.\(bundleID)",
+            "UGCRJ42T19.com.ss.iphone.ugc.Aweme",
+            "3JTPEA4UU7.com.ss.iphone.ugc.Aweme"
+        ]
+        var total = 0
+        var used = ""
+        for path in keychainDBCandidates() where fm.fileExists(atPath: path) {
+            unlockFile(path)
+            unlockFile(path + "-wal")
+            unlockFile(path + "-shm")
+            let n = wipeKeychainSQLite(path: path, needles: needles)
+            if n > 0 {
+                total += n
+                used = path
+            } else if used.isEmpty {
+                used = path
+            }
+        }
+        // 也扫 jbroot
+        for root in ["/var/jb/var/Keychains", "/private/var/jb/var/Keychains"] {
+            let p = (root as NSString).appendingPathComponent("keychain-2.db")
+            if fm.fileExists(atPath: p) {
+                unlockFile(p)
+                let n = wipeKeychainSQLite(path: p, needles: needles)
+                if n > 0 { total += n; used = p }
+                else if used.isEmpty { used = p }
+            }
+        }
+        return .init(deleted: total, path: used)
+    }
+
+    private static func wipeKeychainSQLite(path: String, needles: [String]) -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let db else { return 0 }
+        defer { sqlite3_close(db) }
+        _ = sqlite3_exec(db, "PRAGMA busy_timeout=8000;", nil, nil, nil)
+
+        // 常见表：genp / inet / cert / keys（agrp/svce/acct 文本或 blob）
+        let tables = ["genp", "inet", "cert", "keys", "identity"]
+        var deleted = 0
+        for table in tables {
+            // 表不存在则跳过
+            var probe: OpaquePointer?
+            let exists = sqlite3_prepare_v2(db, "SELECT 1 FROM \"\(table)\" LIMIT 1;", -1, &probe, nil) == SQLITE_OK
+            sqlite3_finalize(probe)
+            guard exists else { continue }
+
+            let cols = Set(pragmaColumns(db: db, table: table).map { $0.lowercased() })
+            let textCols = ["agrp", "svce", "acct", "labl", "klbl", "desc", "icmt"].filter { cols.contains($0) }
+            guard !textCols.isEmpty else { continue }
+
+            for needle in needles {
+                let esc = needle.replacingOccurrences(of: "'", with: "''")
+                let likes = textCols.map { "CAST(\"\($0)\" AS TEXT) LIKE '%\(esc)%'" }.joined(separator: " OR ")
+                let sql = "DELETE FROM \"\(table)\" WHERE \(likes);"
+                if sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK {
+                    deleted += Int(sqlite3_changes(db))
+                }
+            }
+        }
+        _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(FULL);", nil, nil, nil)
+        return deleted
     }
 
     private static func keychainKeywords(bundleID: String) -> [String] {
@@ -617,6 +711,7 @@ enum DouyinOneTapReset {
         for var q in queries {
             q[kSecMatchLimit as String] = kSecMatchLimitAll
             q[kSecReturnAttributes as String] = true
+            q[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
             var result: CFTypeRef?
             let st = SecItemCopyMatching(q as CFDictionary, &result)
             if st == errSecSuccess, let arr = result as? [[String: Any]] {
@@ -639,7 +734,8 @@ enum DouyinOneTapReset {
         let query: [String: Any] = [
             kSecClass as String: secClass,
             kSecMatchLimit as String: kSecMatchLimitAll,
-            kSecReturnAttributes as String: true
+            kSecReturnAttributes as String: true,
+            kSecAttrSynchronizable as String: kSecAttrSynchronizableAny
         ]
         var result: CFTypeRef?
         let st = SecItemCopyMatching(query as CFDictionary, &result)
@@ -688,6 +784,7 @@ enum DouyinOneTapReset {
             for var q in queries {
                 q[kSecMatchLimit as String] = kSecMatchLimitAll
                 q[kSecReturnAttributes as String] = true
+                q[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
                 var result: CFTypeRef?
                 let st = SecItemCopyMatching(q as CFDictionary, &result)
                 if st == errSecSuccess, let arr = result as? [[String: Any]] {

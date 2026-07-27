@@ -94,4 +94,19 @@ enum ShellScriptRunner {
         }
         return .init(ok: ok, exitCode: code, output: raw, message: tip)
     }
+
+    /// 写临时脚本再执行（迁移 / 清目录用，对齐工具箱 RootHelper 调 /bin/cp /bin/rm）
+    static func executeInline(_ scriptBody: String) -> Result {
+        let fm = FileManager.default
+        let url = fm.temporaryDirectory.appendingPathComponent("dymig_\(UUID().uuidString).sh")
+        let body = "#!/bin/sh\nset -e\n" + scriptBody + "\n"
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        } catch {
+            return .init(ok: false, exitCode: -1, output: "", message: "无法写临时脚本：\(error.localizedDescription)")
+        }
+        defer { try? fm.removeItem(at: url) }
+        return execute(path: url.path)
+    }
 }

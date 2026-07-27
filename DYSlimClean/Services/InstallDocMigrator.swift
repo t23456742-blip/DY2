@@ -357,41 +357,99 @@ enum InstallDocMigrator {
         }
 
         let fm = FileManager.default
+        let dstDocs = dstHit.url.appendingPathComponent("Documents", isDirectory: true)
         let dstDir = dstHit.url.appendingPathComponent(relativeDir, isDirectory: true)
+
+        // 先用 /bin/cp /bin/rm（工具箱 RootHelper 同路）。NSFileManager 跨容器常报「无 Documents 权限」
+        let shell = shellMigrate(from: srcDir.path, to: dstDir.path, dstDocuments: dstDocs.path)
+        if shell.ok, fm.fileExists(atPath: dstDir.path) {
+            return Outcome(ok: true, message: "\(target.title)成功")
+        }
+
+        // 回退：POSIX 解锁 + 中转 Media 再拷
         do {
             try forceReplaceDirectory(from: srcDir, to: dstDir)
             return Outcome(ok: true, message: "\(target.title)成功")
         } catch {
-            return Outcome(ok: false, message: "\(target.title)失败（拷贝错误：\(error.localizedDescription)）")
+            let tip = shell.ok ? error.localizedDescription : (shell.output.isEmpty ? shell.message : shell.output)
+            return Outcome(
+                ok: false,
+                message: "\(target.title)失败（\(tip)）\n源：\(srcDir.path)\n目标：\(dstDir.path)"
+            )
         }
+    }
+
+    /// /bin/chmod + rm + cp，绕过 NSFileManager 容器权限检查
+    private static func shellMigrate(from src: String, to dst: String, dstDocuments: String) -> ShellScriptRunner.Result {
+        func q(_ s: String) -> String {
+            "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        }
+        let stageRoot = "/private/var/mobile/Media/dyclean_migrate"
+        let stage = stageRoot + "/_ttinstall_document"
+        let script = """
+        SRC=\(q(src))
+        DST=\(q(dst))
+        DOCS=\(q(dstDocuments))
+        STAGE_ROOT=\(q(stageRoot))
+        STAGE=\(q(stage))
+
+        mkdir -p "$STAGE_ROOT" 2>/dev/null || true
+        rm -rf "$STAGE" 2>/dev/null || true
+        # 先拷到 Media（通常可写），再进目标 Documents
+        /bin/cp -R "$SRC" "$STAGE" || cp -R "$SRC" "$STAGE"
+
+        # 尽量放开目标 Documents
+        /bin/chmod -R u+rwx "$DOCS" 2>/dev/null || chmod -R u+rwx "$DOCS" 2>/dev/null || true
+        /bin/chmod -R 777 "$DOCS" 2>/dev/null || true
+        /usr/bin/chflags -R nouchg,noschg "$DOCS" 2>/dev/null || true
+        /usr/bin/chflags -R nouchg,noschg "$DST" 2>/dev/null || true
+
+        /bin/rm -rf "$DST" 2>/dev/null || rm -rf "$DST" 2>/dev/null || true
+        mkdir -p "$(/usr/bin/dirname "$DST")" 2>/dev/null || mkdir -p "$(dirname "$DST")"
+
+        /bin/cp -R "$STAGE" "$DST" || cp -R "$STAGE" "$DST"
+        /bin/chmod -R u+rwX "$DST" 2>/dev/null || true
+
+        # 校验
+        if [ ! -d "$DST" ]; then
+          echo "DST missing after cp: $DST"
+          ls -la "$DOCS" 2>/dev/null || true
+          exit 2
+        fi
+        echo "OK $DST"
+        """
+        return ShellScriptRunner.executeInline(script)
     }
 
     /// 清权限/不可变标志后替换目录；删不掉就改名旁路再拷
     private static func forceReplaceDirectory(from src: URL, to dst: URL) throws {
         let fm = FileManager.default
-        try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let parent = dst.deletingLastPathComponent()
+        unlockTree(parent)
+        // 中转到 Media 再进目标，减少直接碰 Documents 的权限拦截
+        let stageParent = URL(fileURLWithPath: "/private/var/mobile/Media/dyclean_migrate", isDirectory: true)
+        let stage = stageParent.appendingPathComponent("_ttinstall_document", isDirectory: true)
+        try fm.createDirectory(at: stageParent, withIntermediateDirectories: true)
+        if fm.fileExists(atPath: stage.path) {
+            unlockTree(stage)
+            try? fm.removeItem(at: stage)
+        }
+        try fm.copyItem(at: src, to: stage)
 
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
         if fm.fileExists(atPath: dst.path) {
             unlockTree(dst)
-            do {
-                try fm.removeItem(at: dst)
-            } catch {
-                // 删不掉：挪走旧目录再拷（避免「没有访问权限」卡死）
-                let trash = dst.deletingLastPathComponent()
-                    .appendingPathComponent("._ttinstall_old_\(Int(Date().timeIntervalSince1970))", isDirectory: true)
-                unlockTree(dst)
-                try fm.moveItem(at: dst, to: trash)
-                // 挪走后尽力清掉，失败可忽略
-                unlockTree(trash)
-                try? fm.removeItem(at: trash)
+            try? fm.removeItem(at: dst)
+            if fm.fileExists(atPath: dst.path) {
+                // 不 move 到 Documents 旁（会再触发权限）；直接 merge 覆盖
+                try mergeCopy(from: stage, to: dst)
+                return
             }
         }
-
         do {
-            try fm.copyItem(at: src, to: dst)
+            try fm.copyItem(at: stage, to: dst)
         } catch {
-            // 整夹拷失败 → 逐文件覆盖
-            try mergeCopy(from: src, to: dst)
+            try mergeCopy(from: stage, to: dst)
         }
         unlockTree(dst)
     }
