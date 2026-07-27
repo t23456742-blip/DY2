@@ -1,0 +1,100 @@
+name: Build TIPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Locate project.yml
+        id: root
+        run: |
+          set -euo pipefail
+          echo "Workspace layout:"
+          ls -la
+          # Prefer DYSlimClean/ (web upload path); avoid stale root Resources
+          if [ -f DYSlimClean/project.yml ]; then
+            echo "dir=DYSlimClean" >> "$GITHUB_OUTPUT"
+            echo "Using DYSlimClean/project.yml"
+          elif [ -f project.yml ]; then
+            echo "dir=." >> "$GITHUB_OUTPUT"
+            echo "Using ./project.yml"
+          else
+            echo "ERROR: project.yml not found at ./DYSlimClean/ or ./"
+            find . -maxdepth 3 -name 'project.yml' -print || true
+            exit 1
+          fi
+
+      - name: Select Xcode 16
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: "16"
+
+      - name: Show Xcode
+        run: xcodebuild -version
+
+      - name: Install tools
+        run: |
+          brew install ldid xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode project
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          set -euo pipefail
+          test -f project.yml
+          echo "Generate in: $(pwd)"
+          ls -la
+          # Avoid duplicate Info.plist when both Resources/ trees exist
+          if [ -d Resources ] && [ -d DYSlimClean/Resources ]; then
+            echo "WARN: both Resources/ and DYSlimClean/Resources/ exist - removing nested DYSlimClean/"
+            rm -rf DYSlimClean
+          fi
+          rm -rf DYSlimClean.xcodeproj build dist
+          xcodegen generate
+
+      - name: Build (unsigned)
+        working-directory: ${{ steps.root.outputs.dir }}
+        run: |
+          xcodebuild \
+            -project DYSlimClean.xcodeproj \
+            -scheme DYSlimClean \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            MARKETING_VERSION=15.6 \
+            CURRENT_PROJECT_VERSION=156 \
+            build
+
+      - name: Package tipa
+        working-directory: ${{ steps.root.outputs.dir }}
+        env:
+          MARKETING_VERSION: "15.6"
+          CURRENT_PROJECT_VERSION: "156"
+          LC_ALL: C
+          LANG: C
+        run: |
+          # Strip CRLF without locale/encoding failures
+          perl -pi -e 's/\r\n/\n/g; s/\r/\n/g' scripts/package-tipa.sh
+          chmod +x scripts/package-tipa.sh
+          bash scripts/package-tipa.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DYSlimClean-tipa
+          path: |
+            ${{ steps.root.outputs.dir }}/dist/*.tipa
+            ${{ steps.root.outputs.dir }}/dist/*.ipa
+          if-no-files-found: error
