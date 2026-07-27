@@ -51,13 +51,17 @@ final class CleanViewModel: ObservableObject {
     @Published var showAccountQueryResult = false
     @Published var accountQueryText = ""
     @Published var accountQueryRows: [(String, String)] = []
+    /// 本机查询来源（仅 Application 容器）
+    @Published var accountQuerySource = ""
+    /// 雷神备份查询结果（与本机查询分开显示）
+    @Published var thorQueryRows: [(String, String)] = []
+    @Published var thorQuerySource = ""
+    @Published var thorQueryText = ""
     @Published var showParamExtractResult = false
     @Published var paramExtractText = ""
     @Published var thorBackups: [ThorBackupIndex.Entry] = []
     @Published var showThorExtractResult = false
     @Published var thorExtractText = ""
-    /// 查询结果来源说明（本机容器 / 雷神备份备注）
-    @Published var accountQuerySource = ""
     @Published var shellPath: String = UserDefaults.standard.string(forKey: "dyshell.path")
         ?? "/var/mobile/Media/dyclean.sh"
     @Published var showShellResult = false
@@ -95,7 +99,12 @@ final class CleanViewModel: ObservableObject {
     func reloadThorBackups() {
         let list = ThorBackupIndex.load()
         thorBackups = list
-        log(list.isEmpty ? "雷神备份：未找到 backup_index / Backups" : "雷神备份：\(list.count) 条")
+        if list.isEmpty {
+            log("雷神备份：未找到 backup_index（优先 /private/var/mobile/Media/Thor/Backups/backup_index.plist）")
+        } else {
+            let src = list.first?.indexSource ?? ""
+            log("雷神备份：\(list.count) 条 · 索引 \(src)")
+        }
     }
 
     /// 对雷神备份包提参（不是在线查询）
@@ -103,12 +112,13 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "备份提参…"
-        log("雷神备份提参：\(entry.name)\n\(entry.folderPath)/com.ss.iphone.ugc.Aweme")
+        let pack = entry.displayPath
+        log("雷神备份提参：\(entry.name)\n\(pack)/com.ss.iphone.ugc.Aweme")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: entry.folderPath) else {
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: pack) else {
                 await MainActor.run {
                     self.isBusy = false
-                    self.thorExtractText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n备注：\(entry.name)\n\(entry.folderPath)"
+                    self.thorExtractText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n备注：\(entry.name)\n\(pack)"
                     self.showThorExtractResult = true
                     self.log(self.thorExtractText)
                 }
@@ -126,50 +136,52 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 雷神备份查询：解析 `{backup}/com.ss.iphone.ugc.Aweme`，结果写到上方「抖音查询」面板
+    /// 雷神备份查询：只读 Backups 包内 Aweme，结果写到「雷神备份」卡片（不覆盖本机查询）
     func queryFromThorBackup(_ entry: ThorBackupIndex.Entry) {
         guard !isBusy else { return }
         isBusy = true
         busyText = "备份查询…"
-        log("雷神备份查询：\(entry.name)\n\(entry.folderPath)/com.ss.iphone.ugc.Aweme")
+        let pack = entry.displayPath
+        log("【雷神备份查询】\(entry.name)\n索引：/private/var/mobile/Media/Thor/Backups/backup_index.plist\n包：\(pack)/com.ss.iphone.ugc.Aweme")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: entry.folderPath) else {
+            guard let root = ThorBackupIndex.findAwemeDataRoot(inBackup: pack) else {
                 await MainActor.run {
                     self.isBusy = false
-                    self.accountQuerySource = "雷神·\(entry.name)（未找到 Aweme 目录）"
-                    self.accountQueryRows = [("来源", self.accountQuerySource), ("路径", entry.folderPath)]
-                    self.accountQueryText = "备份包内未找到 com.ss.iphone.ugc.Aweme"
-                    self.showAccountQueryResult = true
-                    self.log(self.accountQueryText)
+                    self.thorQuerySource = "雷神备份 · \(entry.name)（未找到 Aweme）"
+                    self.thorQueryRows = [("来源", "雷神备份包"), ("路径", pack)]
+                    self.thorQueryText = "备份包内未找到 com.ss.iphone.ugc.Aweme\n\(pack)"
+                    self.log(self.thorQueryText)
                 }
                 return
             }
             let snap = DouyinAccountQuery.query(cleaner: cleaner, container: root)
             await MainActor.run {
                 self.isBusy = false
-                self.accountQuerySource = "雷神备份 · \(entry.name)\n\(root.path)"
-                var rows = [("来源", "雷神·\(entry.name)")]
+                self.thorQuerySource = "雷神备份 · \(entry.name)\n\(root.path)"
+                var rows: [(String, String)] = [
+                    ("来源", "雷神备份包"),
+                    ("备注", entry.name),
+                    ("备份目录", pack)
+                ]
                 rows.append(contentsOf: snap.rows)
-                self.accountQueryRows = rows
-                self.accountQueryText = "\(self.accountQuerySource)\n\n\(snap.message)"
-                self.showAccountQueryResult = true
-                self.log(self.accountQuerySource)
+                self.thorQueryRows = rows
+                self.thorQueryText = "\(self.thorQuerySource)\n\n\(snap.message)"
+                self.log(self.thorQuerySource)
                 self.log(snap.message)
             }
         }
     }
 
-    /// 刷新已定位容器路径 + 数据体积（本机沙盒）
+    /// 刷新已定位容器路径 + 数据体积（仅本机 Application）
     func refreshLocatedContainer() {
-        if let url = cleaner.locateAwemeContainer() {
+        if let url = cleaner.locateAwemeContainer(), Self.isLiveApplicationPath(url.path) {
             containerFound = true
             containerPath = url.path
-            log("已找到抖音容器：\(url.path)")
+            log("已找到本机抖音容器：\(url.path)")
             Task.detached(priority: .utility) {
                 let bytes = ContainerDiskSize.byteSize(of: url)
                 let text = ContainerDiskSize.format(bytes)
                 await MainActor.run {
-                    // 路径未变才更新，避免异步回来时容器已切换
                     if self.containerPath == url.path {
                         self.containerSizeText = text
                         self.log("抖音数据大小：\(text)")
@@ -181,7 +193,7 @@ final class CleanViewModel: ObservableObject {
             containerPath = ""
             containerSizeText = "—"
             let diag = cleaner.locateAwemeDiagnostics()
-            log("未找到抖音数据容器（请确认已安装抖音，且本软件已用巨魔安装）")
+            log("未找到本机 Application 抖音容器")
             log(diag)
         }
     }
@@ -549,34 +561,63 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 抖音查询 v3：从已定位本机容器提参后直连查询（不是电脑备份包）
+    /// 本机查询：只扫 `/var/mobile/Containers/Data/Application` 下抖音容器（不走雷神备份）
     func queryDouyinAccountV3() {
         guard !isBusy else { return }
         isBusy = true
-        busyText = "查询中…"
-        let preferred: URL? = (containerFound && !containerPath.isEmpty)
-            ? URL(fileURLWithPath: containerPath)
-            : nil
-        log("开始抖音查询（本机容器）…\(preferred?.path ?? "自动定位")")
+        busyText = "本机查询…"
+        // 强制重新定位 Application 容器，禁止用 Thor 路径
+        let live = Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
+        if let live {
+            containerFound = true
+            containerPath = live.path
+        }
+        log("【本机查询】/var/mobile/Containers/Data/Application …\n\(live?.path ?? "未定位")")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: preferred)
+            let container = live ?? cleaner.locateAwemeContainer().flatMap { Self.isLiveApplicationPath($0.path) ? $0 : nil }
+            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: container)
             await MainActor.run {
                 self.isBusy = false
-                self.accountQueryRows = snap.rows
-                self.accountQueryText = snap.message
-                self.showAccountQueryResult = true
-                if snap.douyinID != "—" {
+                var rows: [(String, String)] = [("来源", "本机容器")]
+                if let p = container?.path {
+                    rows.append(("容器", p))
+                    self.containerPath = p
                     self.containerFound = true
                 }
-                self.accountQuerySource = preferred?.path ?? snap.detail
-                if !self.containerFound {
+                rows.append(contentsOf: snap.rows)
+                self.accountQueryRows = rows
+                self.accountQueryText = snap.message
+                self.showAccountQueryResult = true
+                self.accountQuerySource = container.map { "本机 · Application\n\($0.path)" } ?? "本机 · 未找到 Application 容器"
+                if container == nil {
                     self.log(cleaner.locateAwemeDiagnostics())
                 }
                 self.log(snap.detail)
                 self.log(snap.message)
-                self.log(snap.ok ? "查询完成" : "查询完成（信息不完整）")
+                self.log(snap.ok ? "本机查询完成" : "本机查询完成（信息不完整）")
             }
         }
+    }
+
+    /// 缓存路径若是雷神备份则丢弃，只认 Application 容器
+    private static func liveApplicationContainer(cleaner: SlimCleaner, cachedPath: String) -> URL? {
+        if !cachedPath.isEmpty, isLiveApplicationPath(cachedPath),
+           FileManager.default.fileExists(atPath: cachedPath) {
+            return URL(fileURLWithPath: cachedPath)
+        }
+        if let url = cleaner.locateAwemeContainer(), isLiveApplicationPath(url.path) {
+            return url
+        }
+        return nil
+    }
+
+    private static func isLiveApplicationPath(_ path: String) -> Bool {
+        let p = path.lowercased()
+        // 本机沙盒
+        if p.contains("/containers/data/application/") { return true }
+        // 明确排除雷神
+        if p.contains("/thor/backups/") || p.contains("/media/thor/") { return false }
+        return false
     }
 
     /// 提参：先用已定位容器提取 16 参 → `/private/var/mobile/Media/{抖音号}.txt`
@@ -584,10 +625,8 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "提参中…"
-        let preferred: URL? = (containerFound && !containerPath.isEmpty)
-            ? URL(fileURLWithPath: containerPath)
-            : nil
-        log("开始提参（已定位容器）→ Media/{抖音号}.txt …")
+        let preferred = Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
+        log("开始本机提参 → Media/{抖音号}.txt …\n\(preferred?.path ?? "自动定位")")
         Task.detached(priority: .userInitiated) { [cleaner] in
             let r = DouyinParamExtractor.extractAndSave(cleaner: cleaner, container: preferred)
             await MainActor.run {
@@ -638,7 +677,7 @@ final class CleanViewModel: ObservableObject {
 
 /// 非 MainActor：供 Task.detached 统计容器体积
 enum ContainerDiskSize {
-    static func byteSize(of root: URL) -> Int64 {
+    static func byteSize(of root: URL, budget: Int = 200_000) -> Int64 {
         let fm = FileManager.default
         guard let en = fm.enumerator(
             at: root,
@@ -646,7 +685,10 @@ enum ContainerDiskSize {
             options: [.skipsHiddenFiles]
         ) else { return 0 }
         var total: Int64 = 0
+        var left = budget
         for case let file as URL in en {
+            left -= 1
+            if left <= 0 { break }
             guard let vals = try? file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
                   vals.isRegularFile == true,
                   let sz = vals.fileSize else { continue }
