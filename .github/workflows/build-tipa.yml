@@ -19,7 +19,7 @@ jobs:
           set -euo pipefail
           echo "Workspace layout:"
           ls -la
-          # 优先用 DYSlimClean/（网页整包上传位置），避免根目录残留 Resources 造成重复打包
+          # 优先�?DYSlimClean/（网页整包上传位置），避免根目录残留 Resources 造成重复打包
           if [ -f DYSlimClean/project.yml ]; then
             echo "dir=DYSlimClean" >> "$GITHUB_OUTPUT"
             echo "Using DYSlimClean/project.yml"
@@ -52,9 +52,9 @@ jobs:
           test -f project.yml
           echo "Generate in: $(pwd)"
           ls -la
-          # 防止同目录下又套一层 DYSlimClean/Resources 导致 duplicate Info.plist
+          # 防止同目录下又套一�?DYSlimClean/Resources 导致 duplicate Info.plist
           if [ -d Resources ] && [ -d DYSlimClean/Resources ]; then
-            echo "WARN: both Resources/ and DYSlimClean/Resources/ exist — removing nested DYSlimClean/ to avoid duplicate copy"
+            echo "WARN: both Resources/ and DYSlimClean/Resources/ exist �?removing nested DYSlimClean/ to avoid duplicate copy"
             rm -rf DYSlimClean
           fi
           rm -rf DYSlimClean.xcodeproj build dist
@@ -73,15 +73,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            MARKETING_VERSION=15.3 \
-            CURRENT_PROJECT_VERSION=153 \
+            MARKETING_VERSION=15.4 \
+            CURRENT_PROJECT_VERSION=154 \
             build
 
       - name: Package tipa
         working-directory: ${{ steps.root.outputs.dir }}
         env:
-          MARKETING_VERSION: "15.3"
-          CURRENT_PROJECT_VERSION: "153"
+          MARKETING_VERSION: "15.4"
+          CURRENT_PROJECT_VERSION: "154"
         run: |
           sed -i '' $'s/\r$//' scripts/package-tipa.sh
           chmod +x scripts/package-tipa.sh
