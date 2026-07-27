@@ -216,7 +216,7 @@ enum DouyinAccountQuery {
 
     /// 对齐桌面 douyin_panel：iesdouyin unique_id；失败再用 sec_uid+token 兜底
     private static func queryUserInfoNoProxy(uniqueID: String, secUID: String?, token: String?) -> APIUser {
-        var out = queryIesDouyin(uniqueID: uniqueID)
+        let out = queryIesDouyin(uniqueID: uniqueID)
         if out.status == "正常" || out.status == "封禁" || out.status == "违规"
             || out.status == "禁言" || out.status == "私密" || out.status == "参数非法" {
             return out

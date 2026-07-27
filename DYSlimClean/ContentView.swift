@@ -327,31 +327,7 @@ struct ContentView: View {
 
     private var thorBackupCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("雷神备份查询")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(.white.opacity(0.9))
-                Spacer()
-                Text("Backups 包")
-                    .font(.caption2.weight(.bold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.orange.opacity(0.22))
-                    .foregroundColor(Color.orange)
-                    .clipShape(Capsule())
-                Button {
-                    model.reloadThorBackups()
-                } label: {
-                    Text("刷新")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(accent.opacity(0.18))
-                        .foregroundColor(accent)
-                        .clipShape(Capsule())
-                }
-                .disabled(model.isBusy)
-            }
+            thorBackupHeader
             Text("索引：/private/var/mobile/Media/Thor/Backups/backup_index.plist\n列表每项 → 对应备份文件夹/com.ss.iphone.ugc.Aweme（不查本机 Application）")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
@@ -374,60 +350,15 @@ struct ContentView: View {
                 Text("共 \(model.thorBackups.count) 个备份包")
                     .font(.caption2.weight(.semibold))
                     .foregroundColor(Color.orange.opacity(0.95))
-
                 VStack(spacing: 8) {
                     ForEach(model.thorBackups) { entry in
-                        HStack(alignment: .center, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(entry.name)
-                                    .font(.caption.weight(.bold))
-                                    .foregroundColor(.white)
-                                    .lineLimit(2)
-                                if !entry.createdAt.isEmpty {
-                                    Text(entry.createdAt)
-                                        .font(.caption2)
-                                        .foregroundColor(.white.opacity(0.45))
-                                        .lineLimit(1)
-                                }
-                                Text(entry.displayPath)
-                                    .font(.caption2.monospaced())
-                                    .foregroundColor(.white.opacity(0.35))
-                                    .lineLimit(2)
-                                Text(entry.sizeText)
-                                    .font(.caption2)
-                                    .foregroundColor(accent.opacity(0.85))
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-
-                            Button {
-                                model.queryFromThorBackup(entry)
-                            } label: {
-                                Text("查备份")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
-                                    .background(Color(red: 0.35, green: 0.55, blue: 1.0))
-                                    .foregroundColor(.white)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            .disabled(model.isBusy)
-
-                            Button {
-                                model.extractFromThorBackup(entry)
-                            } label: {
-                                Text("提参")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 8)
-                                    .background(Color(red: 0.95, green: 0.45, blue: 0.35))
-                                    .foregroundColor(.white)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                            }
-                            .disabled(model.isBusy)
-                        }
-                        .padding(10)
-                        .background(Color.black.opacity(0.28))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        ThorBackupRowView(
+                            entry: entry,
+                            accent: accent,
+                            busy: model.isBusy,
+                            onQuery: { model.queryFromThorBackup(entry) },
+                            onExtract: { model.extractFromThorBackup(entry) }
+                        )
                     }
                 }
             }
@@ -439,6 +370,34 @@ struct ContentView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.orange.opacity(0.25), lineWidth: 1)
         )
+    }
+
+    private var thorBackupHeader: some View {
+        HStack {
+            Text("雷神备份查询")
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.white.opacity(0.9))
+            Spacer()
+            Text("Backups 包")
+                .font(.caption2.weight(.bold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.orange.opacity(0.22))
+                .foregroundColor(Color.orange)
+                .clipShape(Capsule())
+            Button {
+                model.reloadThorBackups()
+            } label: {
+                Text("刷新")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(accent.opacity(0.18))
+                    .foregroundColor(accent)
+                    .clipShape(Capsule())
+            }
+            .disabled(model.isBusy)
+        }
     }
 
     private var migrateCard: some View {
@@ -862,6 +821,65 @@ struct ContentView: View {
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
         .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 1))
+    }
+}
+
+/// 拆出行视图，避免 thorBackupCard 类型检查超时
+private struct ThorBackupRowView: View {
+    let entry: ThorBackupIndex.Entry
+    let accent: Color
+    let busy: Bool
+    let onQuery: () -> Void
+    let onExtract: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(entry.name)
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                if !entry.createdAt.isEmpty {
+                    Text(entry.createdAt)
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.45))
+                        .lineLimit(1)
+                }
+                Text(entry.displayPath)
+                    .font(.caption2.monospaced())
+                    .foregroundColor(.white.opacity(0.35))
+                    .lineLimit(2)
+                Text(entry.sizeText)
+                    .font(.caption2)
+                    .foregroundColor(accent.opacity(0.85))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Button(action: onQuery) {
+                Text("查备份")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.35, green: 0.55, blue: 1.0))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+
+            Button(action: onExtract) {
+                Text("提参")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(red: 0.95, green: 0.45, blue: 0.35))
+                    .foregroundColor(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .disabled(busy)
+        }
+        .padding(10)
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 }
 

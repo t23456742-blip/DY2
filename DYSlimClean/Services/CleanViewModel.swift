@@ -566,7 +566,6 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "本机查询…"
-        // 强制重新定位 Application 容器，禁止用 Thor 路径
         let live = Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
         if let live {
             containerFound = true
@@ -574,7 +573,12 @@ final class CleanViewModel: ObservableObject {
         }
         log("【本机查询】/var/mobile/Containers/Data/Application …\n\(live?.path ?? "未定位")")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            let container = live ?? cleaner.locateAwemeContainer().flatMap { Self.isLiveApplicationPath($0.path) ? $0 : nil }
+            let located = cleaner.locateAwemeContainer()
+            let fallback: URL? = {
+                guard let u = located, Self.isLiveApplicationPath(u.path) else { return nil }
+                return u
+            }()
+            let container = live ?? fallback
             let snap = DouyinAccountQuery.query(cleaner: cleaner, container: container)
             await MainActor.run {
                 self.isBusy = false
@@ -600,7 +604,7 @@ final class CleanViewModel: ObservableObject {
     }
 
     /// 缓存路径若是雷神备份则丢弃，只认 Application 容器
-    private static func liveApplicationContainer(cleaner: SlimCleaner, cachedPath: String) -> URL? {
+    nonisolated private static func liveApplicationContainer(cleaner: SlimCleaner, cachedPath: String) -> URL? {
         if !cachedPath.isEmpty, isLiveApplicationPath(cachedPath),
            FileManager.default.fileExists(atPath: cachedPath) {
             return URL(fileURLWithPath: cachedPath)
@@ -611,11 +615,9 @@ final class CleanViewModel: ObservableObject {
         return nil
     }
 
-    private static func isLiveApplicationPath(_ path: String) -> Bool {
+    nonisolated private static func isLiveApplicationPath(_ path: String) -> Bool {
         let p = path.lowercased()
-        // 本机沙盒
         if p.contains("/containers/data/application/") { return true }
-        // 明确排除雷神
         if p.contains("/thor/backups/") || p.contains("/media/thor/") { return false }
         return false
     }
