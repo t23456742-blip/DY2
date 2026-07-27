@@ -82,8 +82,11 @@ jobs:
         env:
           MARKETING_VERSION: "15.4"
           CURRENT_PROJECT_VERSION: "154"
+          LC_ALL: C
+          LANG: C
         run: |
-          sed -i '' $'s/\r$//' scripts/package-tipa.sh
+          # Strip CRLF without locale/encoding failures
+          perl -pi -e 's/\r\n/\n/g; s/\r/\n/g' scripts/package-tipa.sh
           chmod +x scripts/package-tipa.sh
           bash scripts/package-tipa.sh
 
