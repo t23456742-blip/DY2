@@ -204,11 +204,11 @@ struct ContentView: View {
     private var accountQueryCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("抖音查询")
+                Text("本机抖音查询")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white.opacity(0.9))
                 Spacer()
-                Text("直连·无代理")
+                Text("Application 容器")
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
@@ -216,7 +216,7 @@ struct ContentView: View {
                     .foregroundColor(accent)
                     .clipShape(Capsule())
             }
-            Text("从已定位抖音容器提参查询（本机 /var/mobile/Containers/Data/Application/UUID，结构同备份包里的 com.ss.iphone.ugc.Aweme）")
+            Text("只查本机：/var/mobile/Containers/Data/Application/<UUID>\n（与下方雷神备份无关）")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
 
@@ -224,32 +224,11 @@ struct ContentView: View {
                 Text(model.accountQuerySource)
                     .font(.caption2.monospaced())
                     .foregroundColor(accent.opacity(0.9))
-                    .lineLimit(3)
+                    .lineLimit(4)
             }
 
             if !model.accountQueryRows.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(Array(model.accountQueryRows.enumerated()), id: \.offset) { idx, row in
-                        HStack(alignment: .top) {
-                            Text(row.0)
-                                .font(.caption.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.45))
-                                .frame(width: 72, alignment: .leading)
-                            Text(row.1)
-                                .font(.caption.weight(.medium))
-                                .foregroundColor(.white.opacity(0.92))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        .padding(.vertical, 7)
-                        if idx < model.accountQueryRows.count - 1 {
-                            Divider().background(Color.white.opacity(0.08))
-                        }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(Color.black.opacity(0.28))
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                queryRowsView(model.accountQueryRows)
             }
 
             HStack(spacing: 10) {
@@ -257,12 +236,12 @@ struct ContentView: View {
                     model.queryDouyinAccountV3()
                 } label: {
                     HStack(spacing: 8) {
-                        if model.isBusy && model.busyText.contains("查询") {
+                        if model.isBusy && model.busyText.contains("本机查询") {
                             ProgressView().tint(.white)
                         } else {
                             Image(systemName: "magnifyingglass.circle.fill")
                         }
-                        Text(model.isBusy && model.busyText.contains("查询") ? model.busyText : "查询当前抖音号")
+                        Text(model.isBusy && model.busyText.contains("本机查询") ? model.busyText : "查询当前抖音号")
                             .fontWeight(.bold)
                             .font(.subheadline)
                     }
@@ -284,12 +263,12 @@ struct ContentView: View {
                     model.extractAwemeParams()
                 } label: {
                     HStack(spacing: 8) {
-                        if model.isBusy && model.busyText.contains("提参") {
+                        if model.isBusy && model.busyText.contains("提参") && !model.busyText.contains("备份") {
                             ProgressView().tint(.white)
                         } else {
                             Image(systemName: "doc.text.fill")
                         }
-                        Text(model.isBusy && model.busyText.contains("提参") ? model.busyText : "提参")
+                        Text(model.isBusy && model.busyText.contains("提参") && !model.busyText.contains("备份") ? model.busyText : "本机提参")
                             .fontWeight(.bold)
                             .font(.subheadline)
                     }
@@ -308,7 +287,7 @@ struct ContentView: View {
                 .disabled(model.isBusy || !model.containerFound)
             }
 
-            Text("提参：先用上方已定位容器提取 16 项 → /private/var/mobile/Media/{抖音号}.txt")
+            Text("本机提参 → /private/var/mobile/Media/{抖音号}.txt")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.4))
         }
@@ -321,13 +300,45 @@ struct ContentView: View {
         )
     }
 
+    private func queryRowsView(_ rows: [(String, String)]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { idx, row in
+                HStack(alignment: .top) {
+                    Text(row.0)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.white.opacity(0.45))
+                        .frame(width: 72, alignment: .leading)
+                    Text(row.1)
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(.white.opacity(0.92))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.vertical, 7)
+                if idx < rows.count - 1 {
+                    Divider().background(Color.white.opacity(0.08))
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.28))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     private var thorBackupCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text("雷神备份")
+                Text("雷神备份查询")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white.opacity(0.9))
                 Spacer()
+                Text("Backups 包")
+                    .font(.caption2.weight(.bold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.orange.opacity(0.22))
+                    .foregroundColor(Color.orange)
+                    .clipShape(Capsule())
                 Button {
                     model.reloadThorBackups()
                 } label: {
@@ -341,37 +352,57 @@ struct ContentView: View {
                 }
                 .disabled(model.isBusy)
             }
-            Text("读 backup_index · 备注=抖音号-密码 · 数据在 备份包/com.ss.iphone.ugc.Aweme · 查询结果显示在上方")
+            Text("索引：/private/var/mobile/Media/Thor/Backups/backup_index.plist\n列表每项 → 对应备份文件夹/com.ss.iphone.ugc.Aweme（不查本机 Application）")
                 .font(.caption2)
                 .foregroundColor(.white.opacity(0.45))
 
+            if !model.thorQuerySource.isEmpty {
+                Text(model.thorQuerySource)
+                    .font(.caption2.monospaced())
+                    .foregroundColor(Color.orange.opacity(0.95))
+                    .lineLimit(4)
+            }
+            if !model.thorQueryRows.isEmpty {
+                queryRowsView(model.thorQueryRows)
+            }
+
             if model.thorBackups.isEmpty {
-                Text("未找到雷神索引：/var/mobile/Thor/backup_index.plist")
+                Text("未找到雷神索引：/private/var/mobile/Media/Thor/Backups/backup_index.plist")
                     .font(.caption)
                     .foregroundColor(.orange)
             } else {
+                Text("共 \(model.thorBackups.count) 个备份包")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(Color.orange.opacity(0.95))
+
                 VStack(spacing: 8) {
-                    ForEach(model.thorBackups.prefix(12)) { entry in
+                    ForEach(model.thorBackups) { entry in
                         HStack(alignment: .center, spacing: 8) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.name)
                                     .font(.caption.weight(.bold))
                                     .foregroundColor(.white)
-                                    .lineLimit(1)
-                                Text(entry.createdAt.isEmpty ? entry.folderPath : entry.createdAt)
-                                    .font(.caption2)
-                                    .foregroundColor(.white.opacity(0.4))
-                                    .lineLimit(1)
+                                    .lineLimit(2)
+                                if !entry.createdAt.isEmpty {
+                                    Text(entry.createdAt)
+                                        .font(.caption2)
+                                        .foregroundColor(.white.opacity(0.45))
+                                        .lineLimit(1)
+                                }
+                                Text(entry.displayPath)
+                                    .font(.caption2.monospaced())
+                                    .foregroundColor(.white.opacity(0.35))
+                                    .lineLimit(2)
                                 Text(entry.sizeText)
                                     .font(.caption2)
-                                    .foregroundColor(accent.opacity(0.8))
+                                    .foregroundColor(accent.opacity(0.85))
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                             Button {
                                 model.queryFromThorBackup(entry)
                             } label: {
-                                Text("查询")
+                                Text("查备份")
                                     .font(.caption2.weight(.bold))
                                     .padding(.horizontal, 10)
                                     .padding(.vertical, 8)
@@ -397,11 +428,6 @@ struct ContentView: View {
                         .padding(10)
                         .background(Color.black.opacity(0.28))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    if model.thorBackups.count > 12 {
-                        Text("共 \(model.thorBackups.count) 条，仅显示最近 12 条")
-                            .font(.caption2)
-                            .foregroundColor(.white.opacity(0.35))
                     }
                 }
             }
