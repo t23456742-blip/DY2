@@ -73,15 +73,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            MARKETING_VERSION=14.6 \
-            CURRENT_PROJECT_VERSION=146 \
+            MARKETING_VERSION=15.3 \
+            CURRENT_PROJECT_VERSION=153 \
             build
 
       - name: Package tipa
         working-directory: ${{ steps.root.outputs.dir }}
         env:
-          MARKETING_VERSION: "14.6"
-          CURRENT_PROJECT_VERSION: "146"
+          MARKETING_VERSION: "15.3"
+          CURRENT_PROJECT_VERSION: "153"
         run: |
           sed -i '' $'s/\r$//' scripts/package-tipa.sh
           chmod +x scripts/package-tipa.sh
