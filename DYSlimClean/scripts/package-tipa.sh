@@ -5,7 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 APP_NAME="DYSlimClean"
 
-# CI 平铺：Resources/�?；本地嵌套：DYSlimClean/Resources/�?if [[ -f "$ROOT/Resources/DYSlimClean.entitlements" ]]; then
+# Flat CI layout: Resources/; nested local: DYSlimClean/Resources/
+if [[ -f "$ROOT/Resources/DYSlimClean.entitlements" ]]; then
   ENTITLEMENTS="$ROOT/Resources/DYSlimClean.entitlements"
 elif [[ -f "$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements" ]]; then
   ENTITLEMENTS="$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements"
@@ -30,8 +31,9 @@ fi
 
 echo "Using app: $APP_PATH"
 
-# 强制写入版本号（避免 CI �?$(MARKETING_VERSION) 未展开变成默认 1.0�?MARKETING_VERSION="${MARKETING_VERSION:-15.4}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-145}"
+# Force version into Info.plist (CI may leave $(MARKETING_VERSION) unexpanded)
+MARKETING_VERSION="${MARKETING_VERSION:-15.4}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-154}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
@@ -69,4 +71,3 @@ rm -rf "$DIST/Payload"
 
 ls -lh "$DIST/${APP_NAME}.tipa"
 echo "Packaged: $DIST/${APP_NAME}.tipa"
-
