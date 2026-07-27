@@ -5,8 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist"
 APP_NAME="DYSlimClean"
 
-# CI 平铺：Resources/… ；本地嵌套：DYSlimClean/Resources/…
-if [[ -f "$ROOT/Resources/DYSlimClean.entitlements" ]]; then
+# CI 平铺：Resources/�?；本地嵌套：DYSlimClean/Resources/�?if [[ -f "$ROOT/Resources/DYSlimClean.entitlements" ]]; then
   ENTITLEMENTS="$ROOT/Resources/DYSlimClean.entitlements"
 elif [[ -f "$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements" ]]; then
   ENTITLEMENTS="$ROOT/DYSlimClean/Resources/DYSlimClean.entitlements"
@@ -31,8 +30,7 @@ fi
 
 echo "Using app: $APP_PATH"
 
-# 强制写入版本号（避免 CI 里 $(MARKETING_VERSION) 未展开变成默认 1.0）
-MARKETING_VERSION="${MARKETING_VERSION:-15.3}"
+# 强制写入版本号（避免 CI �?$(MARKETING_VERSION) 未展开变成默认 1.0�?MARKETING_VERSION="${MARKETING_VERSION:-15.4}"
 CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-145}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"

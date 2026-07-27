@@ -359,14 +359,95 @@ enum InstallDocMigrator {
         let fm = FileManager.default
         let dstDir = dstHit.url.appendingPathComponent(relativeDir, isDirectory: true)
         do {
-            if fm.fileExists(atPath: dstDir.path) {
-                try fm.removeItem(at: dstDir)
-            }
-            try fm.createDirectory(at: dstDir.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.copyItem(at: srcDir, to: dstDir)
+            try forceReplaceDirectory(from: srcDir, to: dstDir)
             return Outcome(ok: true, message: "\(target.title)成功")
         } catch {
             return Outcome(ok: false, message: "\(target.title)失败（拷贝错误：\(error.localizedDescription)）")
+        }
+    }
+
+    /// 清权限/不可变标志后替换目录；删不掉就改名旁路再拷
+    private static func forceReplaceDirectory(from src: URL, to dst: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+        if fm.fileExists(atPath: dst.path) {
+            unlockTree(dst)
+            do {
+                try fm.removeItem(at: dst)
+            } catch {
+                // 删不掉：挪走旧目录再拷（避免「没有访问权限」卡死）
+                let trash = dst.deletingLastPathComponent()
+                    .appendingPathComponent("._ttinstall_old_\(Int(Date().timeIntervalSince1970))", isDirectory: true)
+                unlockTree(dst)
+                try fm.moveItem(at: dst, to: trash)
+                // 挪走后尽力清掉，失败可忽略
+                unlockTree(trash)
+                try? fm.removeItem(at: trash)
+            }
+        }
+
+        do {
+            try fm.copyItem(at: src, to: dst)
+        } catch {
+            // 整夹拷失败 → 逐文件覆盖
+            try mergeCopy(from: src, to: dst)
+        }
+        unlockTree(dst)
+    }
+
+    private static func mergeCopy(from src: URL, to dst: URL) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: dst, withIntermediateDirectories: true)
+        guard let en = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey], options: []) else {
+            throw NSError(domain: "InstallDocMigrator", code: 1, userInfo: [NSLocalizedDescriptionKey: "无法枚举源 _ttinstall"])
+        }
+        let srcRoot = src.standardizedFileURL.path
+        while let item = en.nextObject() as? URL {
+            let full = item.standardizedFileURL.path
+            guard full.hasPrefix(srcRoot) else { continue }
+            var rel = String(full.dropFirst(srcRoot.count))
+            if rel.hasPrefix("/") { rel.removeFirst() }
+            if rel.isEmpty { continue }
+            let target = dst.appendingPathComponent(rel)
+            let vals = try? item.resourceValues(forKeys: [.isDirectoryKey])
+            if vals?.isDirectory == true {
+                try fm.createDirectory(at: target, withIntermediateDirectories: true)
+                continue
+            }
+            try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: target.path) {
+                unlockTree(target)
+                try? fm.removeItem(at: target)
+            }
+            try fm.copyItem(at: item, to: target)
+        }
+    }
+
+    private static func unlockTree(_ url: URL) {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return }
+        func unlockOne(_ p: String) {
+            try? fm.setAttributes([
+                .posixPermissions: 0o777,
+                .immutable: false,
+                .appendOnly: false
+            ], ofItemAtPath: p)
+            // 清 uchg / schg（不可变）
+            var attrs = (try? fm.attributesOfItem(atPath: p)) ?? [:]
+            attrs[.immutable] = false
+            attrs[.appendOnly] = false
+            try? fm.setAttributes(attrs, ofItemAtPath: p)
+        }
+        unlockOne(url.path)
+        guard isDir.boolValue,
+              let en = fm.enumerator(at: url, includingPropertiesForKeys: nil, options: []) else { return }
+        var budget = 50_000
+        while let item = en.nextObject() as? URL {
+            budget -= 1
+            if budget <= 0 { break }
+            unlockOne(item.path)
         }
     }
 

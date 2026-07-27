@@ -216,11 +216,12 @@ enum DouyinOneTapReset {
             if !mcmOK {
                 try? fm.moveItem(at: newURL, to: oldURL)
                 _ = updateMetadataPlist(at: oldURL, newUUID: oldUUID, bundleID: bundleID)
+                let diag = mcmDiagnostics()
                 return .init(
                     step: .init(
                         name: name,
                         ok: false,
-                        detail: "MCM 未更新（已回滚，数据未丢）。系统库未挂上新 UUID，硬刷新会变成空容器"
+                        detail: "MCM 未更新（已回滚，数据未丢）。\(diag)"
                     ),
                     newPath: nil
                 )
@@ -276,6 +277,11 @@ enum DouyinOneTapReset {
 
     /// 宽搜 MCM sqlite + 按表结构动态 UPDATE（RootHide 路径各异）
     private static func updateMCMDatabase(bundleID: String, oldUUID: String, newUUID: String, newPath: String) -> Bool {
+        // 先试私有 SPI（若系统/工具链暴露）
+        if patchMCMViaPrivateAPI(bundleID: bundleID, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath) {
+            return true
+        }
+
         var candidates: [String] = [
             "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
             "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
@@ -287,54 +293,174 @@ enum DouyinOneTapReset {
             "/private/var/mobile/Library/MobileContainerManager/containers.sqlite"
         ]
         let fm = FileManager.default
-        // RootHide / jbroot 常见挂载前缀
         let scanRoots = [
             "/private/var/containers/Shared/SystemGroup",
             "/var/containers/Shared/SystemGroup",
             "/var/jb/var/containers/Shared/SystemGroup",
             "/private/var/jb/var/containers/Shared/SystemGroup",
             "/var/containers",
-            "/private/var/containers"
+            "/private/var/containers",
+            "/var/root/Library",
+            "/private/var/root/Library",
+            "/var/db",
+            "/private/var/db"
         ]
         for root in scanRoots where fm.fileExists(atPath: root) {
-            if let more = findFiles(namedHints: ["containers.sqlite", "containermanager"], under: root, maxDepth: 6) {
-                candidates.append(contentsOf: more.filter { $0.lowercased().hasSuffix(".sqlite") || $0.lowercased().hasSuffix(".db") })
+            if let more = findFiles(namedHints: ["containers.sqlite", "containermanager"], under: root, maxDepth: 7) {
+                candidates.append(contentsOf: more.filter {
+                    let l = $0.lowercased()
+                    return l.hasSuffix(".sqlite") || l.hasSuffix(".db") || l.contains("containers.sqlite")
+                })
             }
         }
 
         var touched = false
+        var lastError = ""
         for path in Set(candidates) where fm.fileExists(atPath: path) {
-            if patchSQLiteReplace(path: path, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath, bundleID: bundleID) {
-                touched = true
-            }
+            unlockFile(path)
+            unlockFile(path + "-wal")
+            unlockFile(path + "-shm")
+            let r = patchSQLiteReplace(path: path, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath, bundleID: bundleID)
+            if r.ok { touched = true }
+            else if !r.error.isEmpty { lastError = r.error }
         }
+        _ = lastError
         return touched
     }
 
-    private static func patchSQLiteReplace(path: String, oldUUID: String, newUUID: String, newPath: String, bundleID: String) -> Bool {
+    /// 尝试调用系统/私有 Container Manager（工具箱同类思路）
+    private static func patchMCMViaPrivateAPI(bundleID: String, oldUUID: String, newUUID: String, newPath: String) -> Bool {
+        // 1) 自研/工具箱可能挂的 helper 类
+        let helperNames = [
+            "AppManagerHelper",
+            "MCMContainerManager",
+            "_TtC4code16AppManagerHelper"
+        ]
+        for name in helperNames {
+            guard let cls = NSClassFromString(name) as? NSObject.Type else { continue }
+            let sels = [
+                "updateMCMDatabaseForIdentifier:oldUUID:newUUID:newPath:",
+                "replaceContainerUUIDForBundleId:oldUUID:newUUID:",
+                "renameBundleContainerForBundleId:newUUID:"
+            ]
+            for selName in sels {
+                let sel = NSSelectorFromString(selName)
+                guard cls.responds(to: sel) || (cls as AnyObject).responds(to: sel) else { continue }
+                // 静态/共享实例难以稳定调用；有 shared 再试
+                let sharedSel = NSSelectorFromString("shared")
+                let shared2 = NSSelectorFromString("sharedHelper")
+                var target: NSObject?
+                if cls.responds(to: sharedSel) {
+                    target = cls.perform(sharedSel)?.takeUnretainedValue() as? NSObject
+                } else if cls.responds(to: shared2) {
+                    target = cls.perform(shared2)?.takeUnretainedValue() as? NSObject
+                }
+                guard let obj = target, obj.responds(to: sel) else { continue }
+                // 多参 perform 受限，跳过，走 sqlite
+                _ = (bundleID, oldUUID, newUUID, newPath, obj, sel)
+            }
+        }
+        return false
+    }
+
+    private static func unlockFile(_ path: String) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return }
+        try? fm.setAttributes([
+            .posixPermissions: 0o666,
+            .immutable: false,
+            .appendOnly: false
+        ], ofItemAtPath: path)
+    }
+
+    /// MCM 失败诊断：库是否存在 / 能否打开
+    private static func mcmDiagnostics() -> String {
+        let fm = FileManager.default
+        let hints = [
+            "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
+            "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite"
+        ]
+        var found: [String] = []
+        for p in hints where fm.fileExists(atPath: p) { found.append(p) }
+        if found.isEmpty {
+            // 宽搜一个
+            for root in ["/private/var/containers/Shared/SystemGroup", "/var/containers/Shared/SystemGroup"] {
+                if let more = findFiles(namedHints: ["containers.sqlite"], under: root, maxDepth: 6), let first = more.first {
+                    found.append(first)
+                    break
+                }
+            }
+        }
+        if found.isEmpty {
+            return "未找到 containers.sqlite（无权限或 RootHide 路径不同）。请确认已用巨魔重装本 App（含新 entitlements）"
+        }
+        let p = found[0]
+        unlockFile(p)
         var db: OpaquePointer?
-        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK, let db else { return false }
+        let rc = sqlite3_open_v2(p, &db, SQLITE_OPEN_READONLY, nil)
+        defer { if db != nil { sqlite3_close(db) } }
+        if rc != SQLITE_OK {
+            return "找到库但打不开(rc=\(rc))：\(p)"
+        }
+        return "已找到库但 0 行匹配 UUID。系统库未挂上新 UUID 会变空容器。库：\(p)"
+    }
+
+    private struct SQLitePatchResult {
+        var ok: Bool
+        var error: String
+    }
+
+    private static func patchSQLiteReplace(path: String, oldUUID: String, newUUID: String, newPath: String, bundleID: String) -> SQLitePatchResult {
+        var db: OpaquePointer?
+        let openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX
+        let openRC = sqlite3_open_v2(path, &db, openFlags, nil)
+        guard openRC == SQLITE_OK, let db else {
+            return .init(ok: false, error: "open失败 \(openRC) \(path)")
+        }
         defer { sqlite3_close(db) }
 
-        let escapedPath = newPath.replacingOccurrences(of: "'", with: "''")
-        var any = false
+        _ = sqlite3_exec(db, "PRAGMA busy_timeout=8000;", nil, nil, nil)
+        _ = sqlite3_exec(db, "PRAGMA journal_mode=WAL;", nil, nil, nil)
 
-        // 固定常见语句
-        let sqls = [
-            "UPDATE Containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
-            "UPDATE Containers SET UUID='\(newUUID)', Path='\(escapedPath)' WHERE UUID='\(oldUUID)';",
-            "UPDATE containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE uuid='\(oldUUID)';",
-            "UPDATE Containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE identifier='\(bundleID)';",
-            "UPDATE Containers SET UUID='\(newUUID)', Path='\(escapedPath)' WHERE Identifier='\(bundleID)';",
-            "UPDATE containers SET uuid='\(newUUID)', path='\(escapedPath)' WHERE identifier='\(bundleID)';",
-            "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE data_container_uuid='\(oldUUID)';",
-            "UPDATE CodeSigningEntries SET data_container_uuid='\(newUUID)' WHERE identifier='\(bundleID)';"
+        let pathVariants: [String] = {
+            var s = Set<String>()
+            s.insert(newPath)
+            s.insert(newPath.replacingOccurrences(of: "/private", with: ""))
+            if !newPath.hasPrefix("/private"), newPath.hasPrefix("/var") {
+                s.insert("/private" + newPath)
+            }
+            return Array(s)
+        }()
+        let uuidPairs = [
+            (oldUUID, newUUID),
+            (oldUUID.lowercased(), newUUID.lowercased()),
+            (oldUUID.uppercased(), newUUID.uppercased())
         ]
-        for sql in sqls {
-            if sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
+
+        var any = false
+        for (oldU, newU) in uuidPairs {
+            for p in pathVariants {
+                let esc = p.replacingOccurrences(of: "'", with: "''")
+                let sqls = [
+                    "UPDATE Containers SET uuid='\(newU)', path='\(esc)' WHERE uuid='\(oldU)';",
+                    "UPDATE Containers SET UUID='\(newU)', Path='\(esc)' WHERE UUID='\(oldU)';",
+                    "UPDATE containers SET uuid='\(newU)', path='\(esc)' WHERE uuid='\(oldU)';",
+                    "UPDATE Containers SET uuid='\(newU)', path='\(esc)' WHERE identifier='\(bundleID)';",
+                    "UPDATE Containers SET UUID='\(newU)', Path='\(esc)' WHERE Identifier='\(bundleID)';",
+                    "UPDATE containers SET uuid='\(newU)', path='\(esc)' WHERE identifier='\(bundleID)';",
+                    "UPDATE CodeSigningEntries SET data_container_uuid='\(newU)' WHERE data_container_uuid='\(oldU)';",
+                    "UPDATE CodeSigningEntries SET data_container_uuid='\(newU)' WHERE identifier='\(bundleID)';",
+                    // 部分系统用 relative path / 仅目录名
+                    "UPDATE Containers SET uuid='\(newU)' WHERE uuid='\(oldU)';",
+                    "UPDATE Containers SET path='\(esc)' WHERE uuid='\(newU)' OR uuid='\(oldU)' OR identifier='\(bundleID)';"
+                ]
+                for sql in sqls {
+                    if sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
+                }
+            }
         }
 
-        // 动态：所有表里文本列含旧 UUID 的替换
+        // 动态：所有表文本列含旧 UUID
         var tablesStmt: OpaquePointer?
         var tables: [String] = []
         if sqlite3_prepare_v2(db, "SELECT name FROM sqlite_master WHERE type='table';", -1, &tablesStmt, nil) == SQLITE_OK {
@@ -349,16 +475,22 @@ enum DouyinOneTapReset {
         for table in tables {
             let cols = pragmaColumns(db: db, table: table)
             for col in cols {
-                let sql1 = "UPDATE \"\(table)\" SET \"\(col)\"='\(newUUID)' WHERE \"\(col)\"='\(oldUUID)';"
-                if sqlite3_exec(db, sql1, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
-                // 路径字段
-                let sql2 = "UPDATE \"\(table)\" SET \"\(col)\"='\(escapedPath)' WHERE \"\(col)\" LIKE '%\(oldUUID)%';"
-                if col.lowercased().contains("path") {
-                    if sqlite3_exec(db, sql2, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
+                for (oldU, newU) in uuidPairs {
+                    let sql1 = "UPDATE \"\(table)\" SET \"\(col)\"='\(newU)' WHERE \"\(col)\"='\(oldU)';"
+                    if sqlite3_exec(db, sql1, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
+                    if col.lowercased().contains("path") {
+                        for p in pathVariants {
+                            let esc = p.replacingOccurrences(of: "'", with: "''")
+                            let sql2 = "UPDATE \"\(table)\" SET \"\(col)\"='\(esc)' WHERE \"\(col)\" LIKE '%\(oldU)%';"
+                            if sqlite3_exec(db, sql2, nil, nil, nil) == SQLITE_OK, sqlite3_changes(db) > 0 { any = true }
+                        }
+                    }
                 }
             }
         }
-        return any
+
+        _ = sqlite3_exec(db, "PRAGMA wal_checkpoint(FULL);", nil, nil, nil)
+        return .init(ok: any, error: any ? "" : "0行更新 \(path)")
     }
 
     private static func pragmaColumns(db: OpaquePointer, table: String) -> [String] {
@@ -715,8 +847,13 @@ enum DouyinOneTapReset {
     }
 
     private static func shortUUID(_ s: String) -> String {
-        guard s.count >= 8, s != "未找到" else { return s }
-        return String(s.prefix(8)) + "…"
+        guard s.count >= 13, s != "未找到" else { return s }
+        // 显示前两段，避免旧新看起来一样
+        let parts = s.split(separator: "-")
+        if parts.count >= 2 {
+            return "\(parts[0])-\(parts[1])…"
+        }
+        return String(s.prefix(13)) + "…"
     }
 
     private static func firstUUID(in tree: [String: Any], preferKeysMatching needles: [String]) -> String? {
@@ -823,6 +960,11 @@ enum DouyinOneTapReset {
 
     @discardableResult
     private static func terminateApp(bundleID: String) -> Bool {
+        // RunningBoard（工具箱同权）
+        if let rbClass = NSClassFromString("RBProcessManager") as? NSObject.Type
+            ?? NSClassFromString("RBSProcessHandle") as? NSObject.Type {
+            _ = rbClass
+        }
         guard let wsClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else {
             return false
         }
@@ -833,12 +975,13 @@ enum DouyinOneTapReset {
 
         let sels = [
             "terminateApplicationBundleIdentifier:withReason:andReport:andCompletion:",
-            "_terminateApplicationWithBundleIdentifier:"
+            "_terminateApplicationWithBundleIdentifier:",
+            "killApplication:withCompletion:"
         ]
         for name in sels {
             let sel = NSSelectorFromString(name)
             guard ws.responds(to: sel) else { continue }
-            if name.hasPrefix("_terminate") {
+            if name.contains("BundleIdentifier") || name.hasPrefix("_terminate") {
                 _ = ws.perform(sel, with: bundleID)
                 return true
             }

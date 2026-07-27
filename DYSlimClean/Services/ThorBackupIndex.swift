@@ -253,6 +253,7 @@ enum ThorBackupIndex {
     }
 
     /// 在备份包内找抖音数据根：`{backup}/com.ss.iphone.ugc.Aweme`
+    /// 目录存在即返回（即使尚未完全展开）；避免「有包却报无数据」
     static func findAwemeDataRoot(inBackup folderPath: String) -> URL? {
         let fm = FileManager.default
         let resolved = resolveFolderPath(folderPath) ?? folderPath
@@ -263,33 +264,41 @@ enum ThorBackupIndex {
             root.appendingPathComponent("com.ss.iphone.ugc.Aweme"),
             root.appendingPathComponent("com.ss.iphone.ugc.aweme")
         ]
+        // 1) 有指纹 / 沙盒形 → 最佳
         for u in preferred {
-            if looksLikeAwemeContainer(u) || hasSandboxShape(u) {
-                return u
-            }
+            if looksLikeAwemeContainer(u) || hasSandboxShape(u) { return u }
+        }
+        // 2) 目录存在也返回（雷蛇包常有空壳或未解压完的 Aweme 名）
+        for u in preferred {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: u.path, isDirectory: &isDir), isDir.boolValue { return u }
         }
 
-        if looksLikeAwemeContainer(root) || hasSandboxShape(root) {
-            return root
-        }
+        if looksLikeAwemeContainer(root) || hasSandboxShape(root) { return root }
 
+        // 3) 深搜 Aweme 目录 / Aweme.db / plist（备份可能是多 App 包）
         guard let en = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else {
             return nil
         }
-        var budget = 6000
+        var budget = 8000
+        var namedAweme: URL?
+        var byDb: URL?
         while let u = en.nextObject() as? URL {
             budget -= 1
             if budget <= 0 { break }
             let name = u.lastPathComponent
             if name.caseInsensitiveCompare("com.ss.iphone.ugc.Aweme") == .orderedSame {
                 if looksLikeAwemeContainer(u) || hasSandboxShape(u) { return u }
+                if namedAweme == nil { namedAweme = u }
             }
-            if name == "Aweme.db" || name == "com.ss.iphone.ugc.Aweme.plist" {
+            if name == "Aweme.db" || name == "com.ss.iphone.ugc.Aweme.plist" || name == "tt_net_config.config" {
+                // Documents/xxx → container
                 let container = u.deletingLastPathComponent().deletingLastPathComponent()
                 if looksLikeAwemeContainer(container) || hasSandboxShape(container) { return container }
+                if byDb == nil { byDb = container }
             }
         }
-        return nil
+        return namedAweme ?? byDb
     }
 
     private static func hasSandboxShape(_ url: URL) -> Bool {

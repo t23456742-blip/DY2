@@ -244,11 +244,12 @@ final class CleanViewModel: ObservableObject {
                     self.razerQuerySource = ""
                     self.razerQueryRows = [
                         ("备份包", entry.name),
-                        ("状态", "无数据"),
-                        ("是否在线", "—")
+                        ("状态", "无Aweme目录"),
+                        ("是否在线", "—"),
+                        ("说明", "包内无 com.ss.iphone.ugc.Aweme（精简能扫到文件也不代表可提参）")
                     ]
-                    self.patchRazerRow(id: entryID, status: "无数据", online: "—", account: "")
-                    self.log("雷蛇包内未找到 Aweme：\(entry.name)")
+                    self.patchRazerRow(id: entryID, status: "无Aweme目录", online: "—", account: "")
+                    self.log("雷蛇包内未找到 Aweme：\(entry.name)\n\(pack)")
                 }
                 return
             }
@@ -258,10 +259,20 @@ final class CleanViewModel: ObservableObject {
                 self.razerQuerySource = ""
                 var rows = Self.displayQueryRows(from: snap)
                 rows.insert(("备份包", entry.name), at: 0)
+                rows.insert(("Aweme路径", root.path), at: 1)
+                // 有目录但无账号：别笼统叫「无数据」
+                if snap.douyinID == "—" || snap.douyinID.isEmpty {
+                    if let i = rows.firstIndex(where: { $0.0 == "状态" }) {
+                        rows[i] = ("状态", snap.status.isEmpty ? "无账号字段" : snap.status)
+                    } else {
+                        rows.append(("状态", snap.status.isEmpty ? "无账号字段" : snap.status))
+                    }
+                }
                 self.razerQueryRows = rows
                 self.razerQueryText = snap.message
                 let acct = (snap.douyinID == "—" || snap.douyinID.isEmpty) ? "" : snap.douyinID
-                self.patchRazerRow(id: entryID, status: snap.status, online: snap.online, account: acct)
+                let st = (acct.isEmpty ? (snap.status.isEmpty ? "无账号字段" : snap.status) : snap.status)
+                self.patchRazerRow(id: entryID, status: st, online: snap.online, account: acct)
                 self.log(snap.message)
             }
         }
@@ -739,31 +750,40 @@ final class CleanViewModel: ObservableObject {
         guard !isBusy else { return }
         isBusy = true
         busyText = "本机查询…"
-        let live = Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
-        if let live {
+        // 优先带 Aweme 指纹的实容器，避免半刷新空壳
+        let preferred = AppContainerLocator.locateDouyinSource()?.url
+            ?? Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
+        if let preferred, Self.isLiveApplicationPath(preferred.path) {
             containerFound = true
-            containerPath = live.path
+            containerPath = preferred.path
         }
-        log("【本机查询】/var/mobile/Containers/Data/Application …\n\(live?.path ?? "未定位")")
+        log("【本机查询】优先有数据容器\n\(preferred?.path ?? "未定位")")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            let located = cleaner.locateAwemeContainer()
-            let fallback: URL? = {
-                guard let u = located, Self.isLiveApplicationPath(u.path) else { return nil }
-                return u
+            let live: URL? = {
+                if let p = preferred, Self.isLiveApplicationPath(p.path),
+                   FileManager.default.fileExists(atPath: p.path) {
+                    return p
+                }
+                if let hit = AppContainerLocator.locateDouyinSource(), Self.isLiveApplicationPath(hit.url.path) {
+                    return hit.url
+                }
+                if let u = cleaner.locateAwemeContainer(), Self.isLiveApplicationPath(u.path) {
+                    return u
+                }
+                return nil
             }()
-            let container = live ?? fallback
-            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: container)
+            let snap = DouyinAccountQuery.query(cleaner: cleaner, container: live)
             await MainActor.run {
                 self.isBusy = false
                 self.accountQuerySource = ""
                 self.accountQueryRows = Self.displayQueryRows(from: snap)
                 self.accountQueryText = snap.message
                 self.showAccountQueryResult = true
-                if let p = container?.path {
+                if let p = live?.path {
                     self.containerPath = p
                     self.containerFound = true
                 }
-                if container == nil {
+                if live == nil {
                     self.log(cleaner.locateAwemeDiagnostics())
                 }
                 self.log(snap.message)
