@@ -29,7 +29,7 @@ struct RulesView: View {
                     } header: {
                         Text("应用详情 · 改机四项").foregroundColor(accent)
                     } footer: {
-                        Text("点进某个 App：四项可单独执行，也可「一键刷新四项」。")
+                        Text("点进某个 App：四项单独执行（刷新容器 / 清钥匙串 / 标识符 / 广告符）。")
                             .font(.caption2)
                             .foregroundColor(.white.opacity(0.4))
                     }

@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 工具箱同款：应用详情 — 四项可单独点，也可一键四项；展示当前标识
+/// 工具箱同款：应用详情 — 四项单独执行（不再一键合并，避免卡死）
 struct AppIdentityDetailView: View {
     let app: TargetApp
     @ObservedObject var cleanModel: CleanViewModel
@@ -10,7 +10,19 @@ struct AppIdentityDetailView: View {
     private let accent = Color(red: 0.15, green: 0.85, blue: 0.78)
     private let card = Color(red: 0.11, green: 0.14, blue: 0.20)
 
+    private var isDouyin: Bool {
+        app.bundleIDs.contains { $0.caseInsensitiveCompare(SlimCleaner.awemeBundleID) == .orderedSame }
+            || app.id == "com.ss.iphone.ugc.Aweme"
+            || app.title == "抖音"
+    }
+
     private var resolved: (bundleID: String, path: String)? {
+        // 抖音：直接用首页已定位路径
+        if isDouyin,
+           !cleanModel.containerPath.isEmpty,
+           FileManager.default.fileExists(atPath: cleanModel.containerPath) {
+            return (SlimCleaner.awemeBundleID, cleanModel.containerPath)
+        }
         if let hit = AppContainerLocator.locateContainer(bundleIDs: app.bundleIDs) {
             return (hit.bundleID, hit.url.path)
         }
@@ -33,7 +45,7 @@ struct AppIdentityDetailView: View {
                             .foregroundColor(.white.opacity(0.4))
                             .lineLimit(3)
                     } else {
-                        Text("未找到数据容器（未安装或 RootHide 路径不可见）")
+                        Text("未找到数据容器（未安装或路径不可见）")
                             .font(.caption)
                             .foregroundColor(.orange)
                     }
@@ -47,7 +59,7 @@ struct AppIdentityDetailView: View {
             Section {
                 actionRow(
                     title: "刷新容器",
-                    current: "当前 UUID：\(identity.containerText)\n（改 metadata.plist / MCM，不是 IDFV）",
+                    current: "当前 UUID：\(identity.containerText)",
                     color: accent
                 ) {
                     cleanModel.runIdentityAction(.container, app: app, allFour: false)
@@ -61,63 +73,24 @@ struct AppIdentityDetailView: View {
                 }
                 actionRow(
                     title: "刷新标识符",
-                    current: "当前 IDFV：\(identity.vendorText)\n（lsdidentifiers · Vendors，不是容器 metadata）",
+                    current: "当前 IDFV：\(identity.vendorText)",
                     color: Color(red: 0.35, green: 0.75, blue: 1.0)
                 ) {
                     cleanModel.runIdentityAction(.vendor, app: app, allFour: false)
                 }
                 actionRow(
                     title: "刷新广告符",
-                    current: "当前 IDFA：\(identity.advertiserText)\n（lsdidentifiers · Advertisers）",
+                    current: "当前 IDFA：\(identity.advertiserText)",
                     color: Color(red: 0.7, green: 0.45, blue: 1.0)
                 ) {
                     cleanModel.runIdentityAction(.advertiser, app: app, allFour: false)
                 }
             } header: {
-                Text("单项（显示当前标识）").foregroundColor(.white.opacity(0.5))
-            }
-
-            Section {
-                Button {
-                    cleanModel.runIdentityAction(nil, app: app, allFour: true)
-                } label: {
-                    HStack {
-                        if cleanModel.isBusy {
-                            ProgressView().tint(.white)
-                        } else {
-                            Image(systemName: cleanModel.oneTapSucceeded ? "checkmark.circle.fill" : "bolt.fill")
-                        }
-                        Text(cleanModel.oneTapSucceeded ? "再跑 · 一键刷新四项" : "一键刷新四项")
-                            .fontWeight(.bold)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(
-                        Group {
-                            if cleanModel.oneTapSucceeded {
-                                Color.green
-                            } else {
-                                LinearGradient(
-                                    colors: [Color(red: 0.15, green: 0.75, blue: 0.45), Color(red: 0.1, green: 0.55, blue: 0.35)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            }
-                        }
-                    )
-                    .foregroundColor(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
-                .disabled(cleanModel.isBusy || resolved == nil)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-
-                Text("顺序：刷新容器 → 清钥匙串 → 刷新标识符 → 刷新广告符。上方显示的是当前值。")
+                Text("单项改机（点一项执行一项）").foregroundColor(.white.opacity(0.5))
+            } footer: {
+                Text("已去掉「一键四项」，避免扫描系统库卡死。请逐项点。")
                     .font(.caption2)
-                    .foregroundColor(.white.opacity(0.45))
-                    .listRowBackground(Color.clear)
-            } header: {
-                Text("一键（你要的合并）").foregroundColor(accent)
+                    .foregroundColor(.white.opacity(0.4))
             }
 
             if !cleanModel.oneTapStepTexts.isEmpty {
@@ -180,9 +153,13 @@ struct AppIdentityDetailView: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption2)
-                    .foregroundColor(.white.opacity(0.3))
+                if cleanModel.isBusy {
+                    ProgressView().tint(accent)
+                } else {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(.white.opacity(0.3))
+                }
             }
             .padding(.vertical, 4)
         }

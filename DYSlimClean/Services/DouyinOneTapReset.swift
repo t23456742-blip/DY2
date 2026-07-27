@@ -118,9 +118,15 @@ enum DouyinOneTapReset {
     }
 
     /// 单项（工具箱应用详情同款）
-    static func runAction(_ action: Action, bundleIDs: [String], displayName: String, cleaner: SlimCleaner) -> Result {
+    static func runAction(
+        _ action: Action,
+        bundleIDs: [String],
+        displayName: String,
+        cleaner: SlimCleaner,
+        preferredContainerPath: String? = nil
+    ) -> Result {
         _ = cleaner
-        guard let hit = AppContainerLocator.locateContainer(bundleIDs: bundleIDs) else {
+        guard let hit = resolveContainer(bundleIDs: bundleIDs, preferredPath: preferredContainerPath) else {
             return Result(
                 ok: false,
                 steps: [.init(name: action.rawValue, ok: false, detail: "未找到 \(displayName) 容器")],
@@ -145,7 +151,6 @@ enum DouyinOneTapReset {
         case .advertiser:
             step = refreshAdvertisingIdentifier(bundleID: bid)
         }
-        // 容器/标识变更后尽量回写网络权限，减少弹窗
         if action == .container || action == .vendor || action == .advertiser {
             _ = restoreAwemeNetworkTCC(bundleID: bid)
         }
@@ -154,6 +159,19 @@ enum DouyinOneTapReset {
         \(step.ok ? "✓" : "✗") \(step.detail)
         """
         return Result(ok: step.ok, steps: [step], message: tip.trimmingCharacters(in: .whitespacesAndNewlines), newContainerPath: newPath)
+    }
+
+    private static func resolveContainer(
+        bundleIDs: [String],
+        preferredPath: String?
+    ) -> (bundleID: String, url: URL)? {
+        if let p = preferredPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !p.isEmpty,
+           FileManager.default.fileExists(atPath: p) {
+            let bid = bundleIDs.first ?? SlimCleaner.awemeBundleID
+            return (bid, URL(fileURLWithPath: p, isDirectory: true))
+        }
+        return AppContainerLocator.locateContainer(bundleIDs: bundleIDs)
     }
 
     /// 半刷新修复：系统空壳 ← 孤儿有数据目录（只改 MCM 指向，不搬文件）
@@ -276,12 +294,11 @@ enum DouyinOneTapReset {
     }
 
     /// 宽搜 MCM sqlite + 按表结构动态 UPDATE（RootHide 路径各异）
+    /// 注意：禁止全盘深扫，否则一点「刷新容器」就会转圈卡死
     private static func updateMCMDatabase(bundleID: String, oldUUID: String, newUUID: String, newPath: String) -> Bool {
-        // 先试私有 SPI（若系统/工具链暴露）
-        if patchMCMViaPrivateAPI(bundleID: bundleID, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath) {
-            return true
-        }
+        _ = patchMCMViaPrivateAPI(bundleID: bundleID, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath)
 
+        let fm = FileManager.default
         var candidates: [String] = [
             "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
             "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
@@ -290,41 +307,33 @@ enum DouyinOneTapReset {
             "/private/var/db/MobileContainerManager/containers.sqlite",
             "/var/db/MobileContainerManager/containers.sqlite",
             "/var/mobile/Library/MobileContainerManager/containers.sqlite",
-            "/private/var/mobile/Library/MobileContainerManager/containers.sqlite"
+            "/private/var/mobile/Library/MobileContainerManager/containers.sqlite",
+            "/var/jb/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
+            "/private/var/jb/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite"
         ]
-        let fm = FileManager.default
-        let scanRoots = [
+        // 只扫 SystemGroup 下一层 UUID 目录里的固定相对路径（深度固定，秒级结束）
+        for root in [
             "/private/var/containers/Shared/SystemGroup",
-            "/var/containers/Shared/SystemGroup",
-            "/var/jb/var/containers/Shared/SystemGroup",
-            "/private/var/jb/var/containers/Shared/SystemGroup",
-            "/var/containers",
-            "/private/var/containers",
-            "/var/root/Library",
-            "/private/var/root/Library",
-            "/var/db",
-            "/private/var/db"
-        ]
-        for root in scanRoots where fm.fileExists(atPath: root) {
-            if let more = findFiles(namedHints: ["containers.sqlite", "containermanager"], under: root, maxDepth: 7) {
-                candidates.append(contentsOf: more.filter {
-                    let l = $0.lowercased()
-                    return l.hasSuffix(".sqlite") || l.hasSuffix(".db") || l.contains("containers.sqlite")
-                })
+            "/var/containers/Shared/SystemGroup"
+        ] where fm.fileExists(atPath: root) {
+            if let kids = try? fm.contentsOfDirectory(atPath: root) {
+                for kid in kids.prefix(80) {
+                    let p = (root as NSString)
+                        .appendingPathComponent(kid)
+                        .appending("/Library/Caches/com.apple.containermanagerd/containers.sqlite")
+                    if fm.fileExists(atPath: p) { candidates.append(p) }
+                }
             }
         }
 
         var touched = false
-        var lastError = ""
         for path in Set(candidates) where fm.fileExists(atPath: path) {
             unlockFile(path)
             unlockFile(path + "-wal")
             unlockFile(path + "-shm")
             let r = patchSQLiteReplace(path: path, oldUUID: oldUUID, newUUID: newUUID, newPath: newPath, bundleID: bundleID)
             if r.ok { touched = true }
-            else if !r.error.isEmpty { lastError = r.error }
         }
-        _ = lastError
         return touched
     }
 
@@ -373,26 +382,31 @@ enum DouyinOneTapReset {
         ], ofItemAtPath: path)
     }
 
-    /// MCM 失败诊断：库是否存在 / 能否打开
+    /// MCM 失败诊断：库是否存在 / 能否打开（不做全盘扫描）
     private static func mcmDiagnostics() -> String {
         let fm = FileManager.default
         let hints = [
             "/private/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite",
             "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile_container_manager.shared/Library/Caches/com.apple.containermanagerd/containers.sqlite"
         ]
-        var found: [String] = []
-        for p in hints where fm.fileExists(atPath: p) { found.append(p) }
+        var found = hints.filter { fm.fileExists(atPath: $0) }
         if found.isEmpty {
-            // 宽搜一个
             for root in ["/private/var/containers/Shared/SystemGroup", "/var/containers/Shared/SystemGroup"] {
-                if let more = findFiles(namedHints: ["containers.sqlite"], under: root, maxDepth: 6), let first = more.first {
-                    found.append(first)
-                    break
+                guard let kids = try? fm.contentsOfDirectory(atPath: root) else { continue }
+                for kid in kids.prefix(40) {
+                    let p = (root as NSString)
+                        .appendingPathComponent(kid)
+                        .appending("/Library/Caches/com.apple.containermanagerd/containers.sqlite")
+                    if fm.fileExists(atPath: p) {
+                        found.append(p)
+                        break
+                    }
                 }
+                if !found.isEmpty { break }
             }
         }
         if found.isEmpty {
-            return "未找到 containers.sqlite（无权限或 RootHide 路径不同）。请确认已用巨魔重装本 App（含新 entitlements）"
+            return "未找到 containers.sqlite（无权限或路径不同）。请确认已用巨魔重装"
         }
         let p = found[0]
         unlockFile(p)
@@ -402,7 +416,7 @@ enum DouyinOneTapReset {
         if rc != SQLITE_OK {
             return "找到库但打不开(rc=\(rc))：\(p)"
         }
-        return "已找到库但 0 行匹配 UUID。系统库未挂上新 UUID 会变空容器。库：\(p)"
+        return "已找到库但 0 行匹配 UUID。库：\(p)"
     }
 
     private struct SQLitePatchResult {
@@ -1006,36 +1020,40 @@ enum DouyinOneTapReset {
     private static func resolveLSIdentifierPaths(createIfMissing: Bool) -> [String] {
         let fm = FileManager.default
         var paths = Set(candidateIdentifierPlistPaths().filter { fm.fileExists(atPath: $0) })
+        // 浅扫：SystemGroup/<uuid>/Library/Caches/com.apple.lsdidentifiers.plist（不做全树递归）
         for root in [
             "/var/containers/Shared/SystemGroup",
-            "/private/var/containers/Shared/SystemGroup",
-            "/var/mobile/Library/Caches",
-            "/private/var/mobile/Library/Caches",
-            "/var/mobile/Library/Preferences",
-            "/private/var/mobile/Library/Preferences"
+            "/private/var/containers/Shared/SystemGroup"
         ] where fm.fileExists(atPath: root) {
-            if let more = findFiles(namedHints: ["lsdidentifiers"], under: root, maxDepth: 5) {
-                more.forEach { paths.insert($0) }
+            if let kids = try? fm.contentsOfDirectory(atPath: root) {
+                for kid in kids.prefix(60) {
+                    let p = (root as NSString)
+                        .appendingPathComponent(kid)
+                        .appending("/Library/Caches/com.apple.lsdidentifiers.plist")
+                    if fm.fileExists(atPath: p) { paths.insert(p) }
+                }
             }
         }
+        for p in [
+            "/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
+            "/private/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
+            "/var/mobile/Library/Preferences/com.apple.lsdidentifiers.plist",
+            "/private/var/mobile/Library/Preferences/com.apple.lsdidentifiers.plist"
+        ] where fm.fileExists(atPath: p) {
+            paths.insert(p)
+        }
         if paths.isEmpty, createIfMissing {
-            // 首选可写路径：mobile Library Caches
             let preferred = [
                 "/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
-                "/private/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist",
-                "/var/containers/Shared/SystemGroup/systemgroup.com.apple.mobile.shared_container/Library/Caches/com.apple.lsdidentifiers.plist"
+                "/private/var/mobile/Library/Caches/com.apple.lsdidentifiers.plist"
             ]
             for p in preferred {
                 let dir = (p as NSString).deletingLastPathComponent
-                if !fm.fileExists(atPath: dir) {
-                    try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-                }
-                if fm.fileExists(atPath: dir) || (try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)) != nil {
-                    let empty: [String: Any] = ["Vendors": [String: Any](), "Advertisers": [String: Any]()]
-                    if writePlist(empty, to: URL(fileURLWithPath: p)) {
-                        paths.insert(p)
-                        break
-                    }
+                try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                let empty: [String: Any] = ["Vendors": [String: Any](), "Advertisers": [String: Any]()]
+                if writePlist(empty, to: URL(fileURLWithPath: p)) {
+                    paths.insert(p)
+                    break
                 }
             }
         }

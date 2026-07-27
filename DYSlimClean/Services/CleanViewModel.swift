@@ -443,10 +443,22 @@ final class CleanViewModel: ObservableObject {
 
     func migrateInstallDoc(to target: TargetApp) {
         guard !isBusy else { return }
+        // 没有已定位路径就先刷一次
+        if containerPath.isEmpty || !FileManager.default.fileExists(atPath: containerPath) {
+            refreshLocatedContainer()
+        }
+        guard !containerPath.isEmpty, FileManager.default.fileExists(atPath: containerPath) else {
+            installMigrateText = "请先在首页确认已定位到抖音容器，再迁移"
+            showInstallMigrateResult = true
+            log(installMigrateText)
+            return
+        }
         isBusy = true
         busyText = "迁移中…"
+        let src = containerPath
+        log("迁移源（已定位）：\(src)")
         Task.detached(priority: .userInitiated) {
-            let result = InstallDocMigrator.migrate(to: target)
+            let result = InstallDocMigrator.migrate(to: target, sourceContainerPath: src)
             await MainActor.run {
                 self.isBusy = false
                 self.installMigrateText = result.message
@@ -458,10 +470,21 @@ final class CleanViewModel: ObservableObject {
 
     func migrateInstallDocAll() {
         guard !isBusy else { return }
+        if containerPath.isEmpty || !FileManager.default.fileExists(atPath: containerPath) {
+            refreshLocatedContainer()
+        }
+        guard !containerPath.isEmpty, FileManager.default.fileExists(atPath: containerPath) else {
+            installMigrateText = "请先在首页确认已定位到抖音容器，再迁移"
+            showInstallMigrateResult = true
+            log(installMigrateText)
+            return
+        }
         isBusy = true
         busyText = "一键迁移中…"
+        let src = containerPath
+        log("一键迁移源（已定位）：\(src)")
         Task.detached(priority: .userInitiated) {
-            let result = InstallDocMigrator.migrateAll()
+            let result = InstallDocMigrator.migrateAll(sourceContainerPath: src)
             await MainActor.run {
                 self.isBusy = false
                 self.installMigrateText = result.message
@@ -486,12 +509,28 @@ final class CleanViewModel: ObservableObject {
 
         let bundleIDs = app.bundleIDs
         let displayName = app.title
+        let preferredPath: String? = {
+            let isDy = app.bundleIDs.contains {
+                $0.caseInsensitiveCompare(SlimCleaner.awemeBundleID) == .orderedSame
+            }
+            if isDy, !containerPath.isEmpty, FileManager.default.fileExists(atPath: containerPath) {
+                return containerPath
+            }
+            return nil
+        }()
         Task.detached(priority: .userInitiated) { [cleaner] in
             let result: DouyinOneTapReset.Result
             if allFour {
+                // 仍保留接口，但 UI 已去掉；若误触也尽快跑完
                 result = DouyinOneTapReset.runAll(bundleIDs: bundleIDs, displayName: displayName, cleaner: cleaner)
             } else if let action {
-                result = DouyinOneTapReset.runAction(action, bundleIDs: bundleIDs, displayName: displayName, cleaner: cleaner)
+                result = DouyinOneTapReset.runAction(
+                    action,
+                    bundleIDs: bundleIDs,
+                    displayName: displayName,
+                    cleaner: cleaner,
+                    preferredContainerPath: preferredPath
+                )
             } else {
                 result = DouyinOneTapReset.run(cleaner: cleaner)
             }
@@ -745,33 +784,27 @@ final class CleanViewModel: ObservableObject {
         }
     }
 
-    /// 本机查询：只扫 `/var/mobile/Containers/Data/Application` 下抖音容器（不走雷神备份）
+    /// 本机查询：直接用首页已定位的抖音容器路径
     func queryDouyinAccountV3() {
         guard !isBusy else { return }
+        if containerPath.isEmpty || !FileManager.default.fileExists(atPath: containerPath) {
+            refreshLocatedContainer()
+        }
+        let cached = containerPath
+        guard !cached.isEmpty, FileManager.default.fileExists(atPath: cached),
+              Self.isLiveApplicationPath(cached) else {
+            accountQueryText = "未定位到本机抖音容器，请先点状态区刷新/扫描"
+            accountQueryRows = [("状态", "未定位")]
+            showAccountQueryResult = true
+            log(accountQueryText)
+            log(cleaner.locateAwemeDiagnostics())
+            return
+        }
         isBusy = true
         busyText = "本机查询…"
-        // 优先带 Aweme 指纹的实容器，避免半刷新空壳
-        let preferred = AppContainerLocator.locateDouyinSource()?.url
-            ?? Self.liveApplicationContainer(cleaner: cleaner, cachedPath: containerPath)
-        if let preferred, Self.isLiveApplicationPath(preferred.path) {
-            containerFound = true
-            containerPath = preferred.path
-        }
-        log("【本机查询】优先有数据容器\n\(preferred?.path ?? "未定位")")
+        log("【本机查询】使用已定位容器\n\(cached)")
         Task.detached(priority: .userInitiated) { [cleaner] in
-            let live: URL? = {
-                if let p = preferred, Self.isLiveApplicationPath(p.path),
-                   FileManager.default.fileExists(atPath: p.path) {
-                    return p
-                }
-                if let hit = AppContainerLocator.locateDouyinSource(), Self.isLiveApplicationPath(hit.url.path) {
-                    return hit.url
-                }
-                if let u = cleaner.locateAwemeContainer(), Self.isLiveApplicationPath(u.path) {
-                    return u
-                }
-                return nil
-            }()
+            let live = URL(fileURLWithPath: cached, isDirectory: true)
             let snap = DouyinAccountQuery.query(cleaner: cleaner, container: live)
             await MainActor.run {
                 self.isBusy = false
@@ -779,13 +812,7 @@ final class CleanViewModel: ObservableObject {
                 self.accountQueryRows = Self.displayQueryRows(from: snap)
                 self.accountQueryText = snap.message
                 self.showAccountQueryResult = true
-                if let p = live?.path {
-                    self.containerPath = p
-                    self.containerFound = true
-                }
-                if live == nil {
-                    self.log(cleaner.locateAwemeDiagnostics())
-                }
+                self.containerFound = true
                 self.log(snap.message)
                 self.log(snap.ok ? "本机查询完成" : "本机查询完成（信息不完整）")
             }

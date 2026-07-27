@@ -32,8 +32,8 @@ fi
 echo "Using app: $APP_PATH"
 
 # Force version into Info.plist (CI may leave $(MARKETING_VERSION) unexpanded)
-MARKETING_VERSION="${MARKETING_VERSION:-15.5}"
-CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-155}"
+MARKETING_VERSION="${MARKETING_VERSION:-15.6}"
+CURRENT_PROJECT_VERSION="${CURRENT_PROJECT_VERSION:-156}"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${MARKETING_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string ${MARKETING_VERSION}" "$APP_PATH/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${CURRENT_PROJECT_VERSION}" "$APP_PATH/Info.plist" 2>/dev/null \

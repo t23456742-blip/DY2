@@ -337,13 +337,23 @@ enum InstallDocMigrator {
         var message: String
     }
 
-    static func migrate(to target: TargetApp) -> Outcome {
-        guard let srcHit = AppContainerLocator.locateDouyinSource() else {
-            return Outcome(ok: false, message: "\(target.title)失败（未找到抖音）")
+    static func migrate(to target: TargetApp, sourceContainerPath: String? = nil) -> Outcome {
+        // 优先用界面已定位的抖音容器，不再重新瞎找
+        let srcURL: URL? = {
+            if let p = sourceContainerPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !p.isEmpty,
+               FileManager.default.fileExists(atPath: p) {
+                return URL(fileURLWithPath: p, isDirectory: true)
+            }
+            return AppContainerLocator.locateDouyinSource()?.url
+                ?? AppContainerLocator.locateContainer(bundleIDs: AppContainerLocator.douyin.bundleIDs)?.url
+        }()
+        guard let srcHitURL = srcURL else {
+            return Outcome(ok: false, message: "\(target.title)失败（未找到抖音，请先在首页刷新容器）")
         }
-        let srcDir = srcHit.url.appendingPathComponent(relativeDir, isDirectory: true)
+        let srcDir = srcHitURL.appendingPathComponent(relativeDir, isDirectory: true)
         guard FileManager.default.fileExists(atPath: srcDir.path) else {
-            return Outcome(ok: false, message: "\(target.title)失败（抖音无_ttinstall）")
+            return Outcome(ok: false, message: "\(target.title)失败（抖音无_ttinstall）\n容器：\(srcHitURL.path)")
         }
 
         guard let dstHit = AppContainerLocator.locateContainer(bundleIDs: target.bundleIDs) else {
@@ -351,25 +361,21 @@ enum InstallDocMigrator {
             return Outcome(ok: false, message: "\(target.title)失败（未安装或找不到容器 \(ids)）")
         }
 
-        // 防止目标误指回抖音：先删后拷会毁掉源 _ttinstall，导致后续全部失败
-        if dstHit.url.standardizedFileURL.path.caseInsensitiveCompare(srcHit.url.standardizedFileURL.path) == .orderedSame {
+        if dstHit.url.standardizedFileURL.path.caseInsensitiveCompare(srcHitURL.standardizedFileURL.path) == .orderedSame {
             return Outcome(ok: false, message: "\(target.title)失败（目标与抖音容器相同，跳过）")
         }
 
-        let fm = FileManager.default
         let dstDocs = dstHit.url.appendingPathComponent("Documents", isDirectory: true)
         let dstDir = dstHit.url.appendingPathComponent(relativeDir, isDirectory: true)
 
-        // 先用 /bin/cp /bin/rm（工具箱 RootHelper 同路）。NSFileManager 跨容器常报「无 Documents 权限」
         let shell = shellMigrate(from: srcDir.path, to: dstDir.path, dstDocuments: dstDocs.path)
-        if shell.ok, fm.fileExists(atPath: dstDir.path) {
-            return Outcome(ok: true, message: "\(target.title)成功")
+        if shell.ok, FileManager.default.fileExists(atPath: dstDir.path) {
+            return Outcome(ok: true, message: "\(target.title)成功\n源：\(srcHitURL.path)")
         }
 
-        // 回退：POSIX 解锁 + 中转 Media 再拷
         do {
             try forceReplaceDirectory(from: srcDir, to: dstDir)
-            return Outcome(ok: true, message: "\(target.title)成功")
+            return Outcome(ok: true, message: "\(target.title)成功\n源：\(srcHitURL.path)")
         } catch {
             let tip = shell.ok ? error.localizedDescription : (shell.output.isEmpty ? shell.message : shell.output)
             return Outcome(
@@ -377,6 +383,28 @@ enum InstallDocMigrator {
                 message: "\(target.title)失败（\(tip)）\n源：\(srcDir.path)\n目标：\(dstDir.path)"
             )
         }
+    }
+
+    static func migrateAll(sourceContainerPath: String? = nil) -> Outcome {
+        var okTitles: [String] = []
+        var failTitles: [String] = []
+        for t in AppContainerLocator.migrateTargets {
+            if migrate(to: t, sourceContainerPath: sourceContainerPath).ok {
+                okTitles.append(t.title)
+            } else {
+                failTitles.append(t.title)
+            }
+        }
+        if failTitles.isEmpty {
+            return Outcome(ok: true, message: "全部成功：\(okTitles.joined(separator: "、"))")
+        }
+        if okTitles.isEmpty {
+            return Outcome(ok: false, message: "所有APP失败：\(failTitles.joined(separator: "、"))")
+        }
+        return Outcome(
+            ok: false,
+            message: "部分成功\n成功：\(okTitles.joined(separator: "、"))\n失败：\(failTitles.joined(separator: "、"))"
+        )
     }
 
     /// /bin/chmod + rm + cp，绕过 NSFileManager 容器权限检查
@@ -507,26 +535,5 @@ enum InstallDocMigrator {
             if budget <= 0 { break }
             unlockOne(item.path)
         }
-    }
-
-    static func migrateAll() -> Outcome {
-        var okTitles: [String] = []
-        var failTitles: [String] = []
-        for t in AppContainerLocator.migrateTargets {
-            if migrate(to: t).ok {
-                okTitles.append(t.title)
-            } else {
-                failTitles.append(t.title)
-            }
-        }
-        if failTitles.isEmpty && !okTitles.isEmpty {
-            return Outcome(ok: true, message: "所有APP成功")
-        }
-        if okTitles.isEmpty {
-            return Outcome(ok: false, message: "所有APP失败")
-        }
-        let okPart = okTitles.map { "\($0)成功" }.joined(separator: "\n")
-        let failPart = failTitles.map { "\($0)失败" }.joined(separator: "\n")
-        return Outcome(ok: false, message: "\(okPart)\n\(failPart)")
     }
 }
