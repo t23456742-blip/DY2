@@ -13,25 +13,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Locate project.yml
-        id: root
-        run: |
-          set -euo pipefail
-          echo "Workspace layout:"
-          ls -la
-          # Prefer DYSlimClean/ (web upload path); avoid stale root Resources
-          if [ -f DYSlimClean/project.yml ]; then
-            echo "dir=DYSlimClean" >> "$GITHUB_OUTPUT"
-            echo "Using DYSlimClean/project.yml"
-          elif [ -f project.yml ]; then
-            echo "dir=." >> "$GITHUB_OUTPUT"
-            echo "Using ./project.yml"
-          else
-            echo "ERROR: project.yml not found at ./DYSlimClean/ or ./"
-            find . -maxdepth 3 -name 'project.yml' -print || true
-            exit 1
-          fi
-
       - name: Select Xcode 16
         uses: maxim-lobanov/setup-xcode@v1
         with:
@@ -45,56 +26,45 @@ jobs:
           brew install ldid xcodegen
           xcodegen --version
 
-      - name: Generate Xcode project
-        working-directory: ${{ steps.root.outputs.dir }}
+      # 兼容两种仓库布局：project.yml 在根目录，或在 TTMigrate/ 子目录
+      - name: Generate + Build + Package
         run: |
           set -euo pipefail
-          test -f project.yml
-          echo "Generate in: $(pwd)"
-          ls -la
-          # Avoid duplicate Info.plist when both Resources/ trees exist
-          if [ -d Resources ] && [ -d DYSlimClean/Resources ]; then
-            echo "WARN: both Resources/ and DYSlimClean/Resources/ exist - removing nested DYSlimClean/"
-            rm -rf DYSlimClean
+          WS="$GITHUB_WORKSPACE"
+          if [ -f "$WS/project.yml" ]; then
+            WORK="$WS"
+          elif [ -f "$WS/TTMigrate/project.yml" ]; then
+            WORK="$WS/TTMigrate"
+          else
+            echo "ERROR: project.yml not found"; exit 1
           fi
-          rm -rf DYSlimClean.xcodeproj build dist
-          xcodegen generate
+          echo "WORK=$WORK" >> "$GITHUB_ENV"
+          cd "$WORK"
 
-      - name: Build (unsigned)
-        working-directory: ${{ steps.root.outputs.dir }}
-        run: |
+          xcodegen generate
           xcodebuild \
-            -project DYSlimClean.xcodeproj \
-            -scheme DYSlimClean \
+            -project TTMigrate.xcodeproj \
+            -scheme TTMigrate \
             -configuration Release \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            MARKETING_VERSION=15.5 \
-            CURRENT_PROJECT_VERSION=155 \
             build
 
-      - name: Package tipa
-        working-directory: ${{ steps.root.outputs.dir }}
-        env:
-          MARKETING_VERSION: "15.5"
-          CURRENT_PROJECT_VERSION: "155"
-          LC_ALL: C
-          LANG: C
-        run: |
-          # Strip CRLF without locale/encoding failures
-          perl -pi -e 's/\r\n/\n/g; s/\r/\n/g' scripts/package-tipa.sh
+          sed -i '' $'s/\r$//' scripts/package-tipa.sh || true
           chmod +x scripts/package-tipa.sh
           bash scripts/package-tipa.sh
+
+          mkdir -p "$WS/artifacts"
+          cp dist/*.tipa "$WS/artifacts/" 2>/dev/null || true
+          cp dist/*.ipa  "$WS/artifacts/" 2>/dev/null || true
+          ls -lh "$WS/artifacts"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DYSlimClean-tipa
-          path: |
-            ${{ steps.root.outputs.dir }}/dist/*.tipa
-            ${{ steps.root.outputs.dir }}/dist/*.ipa
+          name: TTMigrate-tipa
+          path: artifacts/*
           if-no-files-found: error
