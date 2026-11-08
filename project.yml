@@ -1,0 +1,65 @@
+name: TTMigrate
+options:
+  bundleIdPrefix: com.ttmigrate
+  deploymentTarget:
+    iOS: "15.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    TARGETED_DEVICE_FAMILY: "1,2"
+    IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+    SWIFT_VERSION: "5.0"
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    DEVELOPMENT_TEAM: ""
+    PRODUCT_BUNDLE_IDENTIFIER: com.ttmigrate.plugin
+    MARKETING_VERSION: "2.0"
+    CURRENT_PROJECT_VERSION: "2"
+    GENERATE_INFOPLIST_FILE: "NO"
+    INFOPLIST_FILE: TTMigrate/Resources/Info.plist
+    CODE_SIGN_ENTITLEMENTS: TTMigrate/Resources/TTMigrate.entitlements
+    SUPPORTS_MACCATALYST: "NO"
+    ENABLE_BITCODE: "NO"
+targets:
+  TTMigrate:
+    type: application
+    platform: iOS
+    sources:
+      - path: TTMigrate
+        excludes:
+          - Resources/**
+      - path: TTMigrate/Resources
+        buildPhase: resources
+        excludes:
+          - Info.plist
+          - TTMigrate.entitlements
+    settings:
+      base:
+        PRODUCT_NAME: TTMigrate
+        PRODUCT_BUNDLE_IDENTIFIER: com.ttmigrate.plugin
+        INFOPLIST_FILE: TTMigrate/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: TTMigrate/Resources/TTMigrate.entitlements
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: TTMigrate/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: 票据迁移
+        CFBundleName: 票据迁移
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleLocalizations:
+          - zh-Hans
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        MinimumOSVersion: "15.0"
+schemes:
+  TTMigrate:
+    build:
+      targets:
+        TTMigrate: all
+    run:
+      config: Debug
+    archive:
+      config: Release
