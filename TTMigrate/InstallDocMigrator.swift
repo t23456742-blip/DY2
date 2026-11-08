@@ -31,6 +31,8 @@ enum AppContainerLocator {
             id: "hongguo",
             title: "红果免费短剧",
             bundleIDs: [
+                "com.phoenix.video",
+                "com.phoenix.video.lite",
                 "com.phoenix.read",
                 "com.phoenix.read.ios",
                 "com.phoenix.read.lite"
@@ -163,7 +165,7 @@ enum AppContainerLocator {
         return index
     }
 
-    /// 精确 → 前缀（Crane 多开 / 渠道包 bundleID 形如 com.phoenix.read.clone1）
+    /// 精确 → 前缀（Crane 多开 / 渠道包 bundleID 形如 com.phoenix.video.clone1）
     static func locateViaIndex(_ bundleIDs: [String], index: [String: URL]) -> URL? {
         for bid in bundleIDs {
             if let url = index[bid.lowercased()] { return url }
@@ -282,7 +284,7 @@ enum AppContainerLocator {
         if index.count > 0 && index.keys.allSatisfy({ $0.hasPrefix("com.apple.") }) {
             lines.append("· 只看到系统 App → 目标 App 确实未安装。")
         }
-        lines.append("· 若样本里出现类似 com.phoenix.read.xxx 的条目，说明是多开/渠道包，已支持前缀匹配。")
+        lines.append("· 若样本里出现类似 com.phoenix.video.xxx 的条目，说明是多开/渠道包，已支持前缀匹配。")
         return lines.joined(separator: "\n")
     }
 }
