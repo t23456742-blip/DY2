@@ -1,17 +1,25 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 
 @MainActor
 final class MigrateViewModel: ObservableObject {
+    enum Panel: String, Identifiable {
+        case result, diagnosis
+        var id: String { rawValue }
+    }
+
     @Published var isBusy = false
     @Published var sourceOK = false
     @Published var sourcePath = ""
     @Published var installedIDs: Set<String> = []
-    @Published var showResult = false
+    @Published var panel: Panel?
     @Published var results: [InstallDocMigrator.Outcome] = []
     @Published var summary = ""
     @Published var headerText = ""
+
+    @Published var diagnosisText = ""
 
     var targets: [TargetApp] { AppContainerLocator.allTargets }
 
@@ -19,19 +27,34 @@ final class MigrateViewModel: ObservableObject {
 
     func isInstalled(_ app: TargetApp) -> Bool { installedIDs.contains(app.id) }
 
-    /// 刷新：检测抖音票据目录 + 各目标 App 是否已安装
+    /// 刷新：检测抖音票据目录 + 各目标 App 是否已安装（一次索引，共用）
     func refresh() {
         Task.detached(priority: .userInitiated) {
+            let index = AppContainerLocator.containerIndex()
             let src = InstallDocMigrator.locateSource()
             var installed = Set<String>()
-            for app in AppContainerLocator.allTargets where AppContainerLocator.isInstalled(app) {
+            for app in AppContainerLocator.allTargets where AppContainerLocator.isInstalled(app, index: index) {
                 installed.insert(app.id)
             }
             let path = src?.path ?? ""
+            let hasSource = (src != nil)
             await MainActor.run {
-                self.sourceOK = (src != nil)
+                self.sourceOK = hasSource
                 self.sourcePath = path
                 self.installedIDs = installed
+            }
+        }
+    }
+
+    /// 诊断报告
+    func runDiagnosis() {
+        isBusy = true
+        Task.detached(priority: .userInitiated) {
+            let text = AppContainerLocator.diagnosisText()
+            await MainActor.run {
+                self.isBusy = false
+                self.diagnosisText = text
+                self.panel = .diagnosis
             }
         }
     }
@@ -47,27 +70,49 @@ final class MigrateViewModel: ObservableObject {
                 self.results = [outcome]
                 self.summary = outcome.ok ? "成功" : "失败"
                 self.headerText = target.title
-                self.showResult = true
+                self.panel = .result
+                if !outcome.ok { self.refresh() }
             }
         }
     }
 
-    /// 一键迁移：只处理已安装 App
+    /// 一键迁移：任务内部现检测一次，避免界面状态未刷新导致“未检测到已安装”
     func migrateAll() {
         guard !isBusy else { return }
         isBusy = true
         Task.detached(priority: .userInitiated) {
+            let index = AppContainerLocator.containerIndex()
+            var installed = Set<String>()
+            for app in AppContainerLocator.allTargets where AppContainerLocator.isInstalled(app, index: index) {
+                installed.insert(app.id)
+            }
+
             let outcomes = InstallDocMigrator.migrateInstalled()
+            let needDiagnosis = outcomes.isEmpty
+            let diag = needDiagnosis ? AppContainerLocator.diagnosisText() : ""
             let okCount = outcomes.filter { $0.ok }.count
             let total = outcomes.count
+
             await MainActor.run {
                 self.isBusy = false
+                self.installedIDs = installed
                 self.results = outcomes
-                self.headerText = "一键迁移 · 已安装 \(total) 个"
-                self.summary = total == 0 ? "未检测到已安装的目标 App"
-                    : (okCount == total ? "全部成功（\(okCount)/\(total)）"
-                       : (okCount == 0 ? "全部失败（0/\(total)）" : "部分成功（\(okCount)/\(total)）"))
-                self.showResult = true
+                self.headerText = "一键迁移"
+                if needDiagnosis {
+                    self.summary = "未检测到已安装的目标 App"
+                } else if okCount == total {
+                    self.summary = "全部成功（\(okCount)/\(total)）"
+                } else if okCount == 0 {
+                    self.summary = "全部失败（0/\(total)）"
+                } else {
+                    self.summary = "部分成功（\(okCount)/\(total)）"
+                }
+                if needDiagnosis {
+                    self.diagnosisText = diag
+                    self.panel = .diagnosis
+                } else {
+                    self.panel = .result
+                }
             }
         }
     }
@@ -86,7 +131,6 @@ struct ResultSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(summary)
                         .font(.headline)
-                        .foregroundColor(.primary)
                         .padding(.top, 4)
 
                     ForEach(results) { item in
@@ -116,6 +160,36 @@ struct ResultSheet: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+}
+
+/// 诊断弹窗（可复制）
+struct DiagnosisSheet: View {
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .textSelection(.enabled)
+            }
+            .navigationTitle("诊断")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("复制") { UIPasteboard.general.string = text }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("完成") { dismiss() }
                 }

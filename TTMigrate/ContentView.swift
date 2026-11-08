@@ -18,6 +18,9 @@ struct ContentView: View {
                 VStack(spacing: 14) {
                     header
                     sourceCard
+                    if model.sourceOK && model.installedCount == 0 {
+                        detectionHint
+                    }
                     oneClickButton
                     targetGrid
                     hintCard
@@ -40,8 +43,13 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .environment(\.locale, Locale(identifier: "zh_CN"))
         .onAppear { model.refresh() }
-        .sheet(isPresented: $model.showResult) {
-            ResultSheet(title: model.headerText, summary: model.summary, results: model.results)
+        .sheet(item: $model.panel) { panel in
+            switch panel {
+            case .result:
+                ResultSheet(title: model.headerText, summary: model.summary, results: model.results)
+            case .diagnosis:
+                DiagnosisSheet(text: model.diagnosisText)
+            }
         }
     }
 
@@ -53,7 +61,7 @@ struct ContentView: View {
                 Text("票据迁移")
                     .font(.system(size: 26, weight: .bold))
                     .foregroundColor(.white)
-                Text("v2.0")
+                Text("v2.1")
                     .font(.caption2.weight(.bold))
                     .foregroundColor(accent)
                     .padding(.horizontal, 6)
@@ -79,6 +87,9 @@ struct ContentView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(.white)
                 Spacer()
+                Button("诊断") { model.runDiagnosis() }
+                    .font(.caption.weight(.bold))
+                    .foregroundColor(.orange)
                 Button("刷新") { model.refresh() }
                     .font(.caption.weight(.bold))
                     .foregroundColor(accent)
@@ -99,6 +110,36 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(card)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    // MARK: - 检测不到时提示
+
+    private var detectionHint: some View {
+        Button {
+            model.runDiagnosis()
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "questionmark.circle.fill")
+                    .foregroundColor(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("未检测到已安装的目标 App")
+                        .font(.caption.weight(.bold))
+                        .foregroundColor(.white)
+                    Text("常见原因：目标 App 从未打开过 / 非巨魔签名导致无沙盒权限 / 多开包 BundleID 不同。点此生成诊断报告。")
+                        .font(.system(size: 10))
+                        .foregroundColor(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+            }
+            .padding(12)
+            .background(Color.orange.opacity(0.10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Color.orange.opacity(0.28), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 
     // MARK: - 一键迁移
